@@ -2,7 +2,14 @@
 torch>=2.0.0
 torchvision>=0.15.0
 numpy>=1.21.0
-timm>=0.9.0  # For EfficientNetV2 pretrained models
+
+# OpenMMLab (backbone)
+mmpretrain>=1.0.0  # For EfficientNetV2 backbone
+mmengine>=0.10.0   # OpenMMLab engine
+mmcv>=2.0.0        # OpenMMLab CV utilities
+
+# Fallback (if mmpretrain not available)
+timm>=0.9.0  # Alternative EfficientNetV2 implementation
 
 # Data handling and processing
 pandas>=1.3.0

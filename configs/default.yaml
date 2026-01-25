@@ -3,13 +3,15 @@
 
 # ============ Model Configuration ============
 model:
-  backbone: "efficientnetv2_s"  # Options: efficientnetv2_s, efficientnetv2_m, efficientnetv2_l
+  # EfficientNetV2 backbone (via mmpretrain)
+  backbone_arch: "s"  # Options: s, m, l, xl (EfficientNetV2 variants)
+  out_indices: [1, 2, 3, 4]  # Feature extraction stages
   num_classes: 2
   pretrained: true
   fpn_channels: 256
   attention_channels: 512
   use_counterfactual: true
-  freeze_backbone_stages: 0  # 0 = no freezing, 1-4 = freeze stages
+  freeze_backbone_stages: -1  # -1 = no freezing, 0-4 = freeze stages
 
 # ============ Data Configuration ============
 data:
