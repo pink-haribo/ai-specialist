@@ -5,7 +5,13 @@ Training Script for GAIN-MTL
 Usage:
     python train.py --config configs/default.yaml
     python train.py --config configs/default.yaml --data_root /path/to/data
-    python train.py --config configs/default.yaml --backbone efficientnetv2_m
+    python train.py --config configs/default.yaml --backbone m  # EfficientNetV2-M
+
+Backbone options (mmpretrain):
+    s   - EfficientNetV2-S (Small)
+    m   - EfficientNetV2-M (Medium)
+    l   - EfficientNetV2-L (Large)
+    xl  - EfficientNetV2-XL (Extra Large)
 
 For multi-GPU training:
     torchrun --nproc_per_node=4 train.py --config configs/default.yaml
@@ -44,7 +50,8 @@ def parse_args():
     parser.add_argument('--data_root', type=str, default=None,
                         help='Override data root directory')
     parser.add_argument('--backbone', type=str, default=None,
-                        help='Override backbone (efficientnetv2_s/m/l)')
+                        choices=['s', 'm', 'l', 'xl'],
+                        help='Override backbone arch (s/m/l/xl for EfficientNetV2)')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override batch size')
     parser.add_argument('--epochs', type=int, default=None,
@@ -81,7 +88,7 @@ def main():
     if args.data_root:
         config['data']['data_root'] = args.data_root
     if args.backbone:
-        config['model']['backbone'] = args.backbone
+        config['model']['backbone_arch'] = args.backbone
     if args.batch_size:
         config['training']['batch_size'] = args.batch_size
     if args.epochs:
@@ -102,7 +109,8 @@ def main():
         config['experiment']['name'] = args.name
     else:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        config['experiment']['name'] = f"{config['model']['backbone']}_{timestamp}"
+        arch = config['model']['backbone_arch']
+        config['experiment']['name'] = f"efficientnetv2_{arch}_{timestamp}"
 
     # Set seed
     set_seed(config['experiment']['seed'])
@@ -144,13 +152,14 @@ def main():
     print('=' * 60)
 
     model = GAINMTLModel(
-        backbone_name=config['model']['backbone'],
+        backbone_arch=config['model']['backbone_arch'],
         num_classes=config['model']['num_classes'],
         pretrained=config['model']['pretrained'],
         fpn_channels=config['model']['fpn_channels'],
         attention_channels=config['model']['attention_channels'],
         use_counterfactual=config['model']['use_counterfactual'],
         freeze_backbone_stages=config['model']['freeze_backbone_stages'],
+        out_indices=tuple(config['model'].get('out_indices', [1, 2, 3, 4])),
     )
 
     model = model.to(device)

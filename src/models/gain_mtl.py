@@ -79,24 +79,26 @@ class GAINMTLModel(nn.Module):
 
     def __init__(
         self,
-        backbone_name: str = 'efficientnetv2_s',
+        backbone_arch: str = 's',
         num_classes: int = 2,
         pretrained: bool = True,
         fpn_channels: int = 256,
         attention_channels: int = 512,
         use_counterfactual: bool = True,
-        freeze_backbone_stages: int = 0,
+        freeze_backbone_stages: int = -1,
+        out_indices: Tuple[int, ...] = (1, 2, 3, 4),
     ):
         super().__init__()
 
         self.num_classes = num_classes
         self.use_counterfactual = use_counterfactual
 
-        # ============ Backbone ============
+        # ============ Backbone (mmpretrain EfficientNetV2) ============
         self.backbone = get_backbone(
-            name=backbone_name,
+            arch=backbone_arch,
             pretrained=pretrained,
-            freeze_stages=freeze_backbone_stages,
+            frozen_stages=freeze_backbone_stages,
+            out_indices=out_indices,
         )
         backbone_channels = self.backbone.get_feature_dims()
         final_channels = backbone_channels[-1]
@@ -401,22 +403,23 @@ def build_gain_mtl_model(
         Configured GAINMTLModel instance
     """
     return GAINMTLModel(
-        backbone_name=config.get('backbone', 'efficientnetv2_s'),
+        backbone_arch=config.get('backbone_arch', 's'),
         num_classes=config.get('num_classes', 2),
         pretrained=config.get('pretrained', True),
         fpn_channels=config.get('fpn_channels', 256),
         attention_channels=config.get('attention_channels', 512),
         use_counterfactual=config.get('use_counterfactual', True),
-        freeze_backbone_stages=config.get('freeze_backbone_stages', 0),
+        freeze_backbone_stages=config.get('freeze_backbone_stages', -1),
+        out_indices=tuple(config.get('out_indices', [1, 2, 3, 4])),
     )
 
 
 # Convenience aliases for different model sizes
 class GAINMTLSmall(GAINMTLModel):
-    """GAIN-MTL with EfficientNetV2-S backbone."""
+    """GAIN-MTL with EfficientNetV2-S backbone (mmpretrain)."""
     def __init__(self, num_classes: int = 2, **kwargs):
         super().__init__(
-            backbone_name='efficientnetv2_s',
+            backbone_arch='s',
             num_classes=num_classes,
             fpn_channels=256,
             attention_channels=256,
@@ -425,10 +428,10 @@ class GAINMTLSmall(GAINMTLModel):
 
 
 class GAINMTLMedium(GAINMTLModel):
-    """GAIN-MTL with EfficientNetV2-M backbone."""
+    """GAIN-MTL with EfficientNetV2-M backbone (mmpretrain)."""
     def __init__(self, num_classes: int = 2, **kwargs):
         super().__init__(
-            backbone_name='efficientnetv2_m',
+            backbone_arch='m',
             num_classes=num_classes,
             fpn_channels=256,
             attention_channels=384,
@@ -437,12 +440,24 @@ class GAINMTLMedium(GAINMTLModel):
 
 
 class GAINMTLLarge(GAINMTLModel):
-    """GAIN-MTL with EfficientNetV2-L backbone."""
+    """GAIN-MTL with EfficientNetV2-L backbone (mmpretrain)."""
     def __init__(self, num_classes: int = 2, **kwargs):
         super().__init__(
-            backbone_name='efficientnetv2_l',
+            backbone_arch='l',
             num_classes=num_classes,
             fpn_channels=384,
             attention_channels=512,
+            **kwargs
+        )
+
+
+class GAINMTLExtraLarge(GAINMTLModel):
+    """GAIN-MTL with EfficientNetV2-XL backbone (mmpretrain)."""
+    def __init__(self, num_classes: int = 2, **kwargs):
+        super().__init__(
+            backbone_arch='xl',
+            num_classes=num_classes,
+            fpn_channels=512,
+            attention_channels=640,
             **kwargs
         )
