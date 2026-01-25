@@ -1,0 +1,105 @@
+# GAIN-MTL Default Configuration
+# EfficientNetV2 + Guided Attention + Multi-Task Learning
+
+# ============ Model Configuration ============
+model:
+  backbone: "efficientnetv2_s"  # Options: efficientnetv2_s, efficientnetv2_m, efficientnetv2_l
+  num_classes: 2
+  pretrained: true
+  fpn_channels: 256
+  attention_channels: 512
+  use_counterfactual: true
+  freeze_backbone_stages: 0  # 0 = no freezing, 1-4 = freeze stages
+
+# ============ Data Configuration ============
+data:
+  data_root: "./data"
+  dataset_type: "generic"  # Options: generic, mvtec
+  category: "bottle"  # For MVTec dataset
+  image_size: [512, 512]
+  augmentation_level: "medium"  # Options: light, medium, heavy
+
+# ============ Training Configuration ============
+training:
+  # Basic
+  num_epochs: 100
+  batch_size: 16
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+
+  # Multi-stage training ratios
+  stage1_ratio: 0.25  # Classification only
+  stage2_ratio: 0.25  # + Attention mining
+  stage3_ratio: 0.25  # + Localization
+  stage4_ratio: 0.25  # Full training with counterfactual
+
+  # Optimization
+  optimizer: "adamw"  # Options: adam, adamw, sgd
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  use_amp: true  # Mixed precision training
+
+  # Learning rate scheduler
+  scheduler_type: "cosine"  # Options: cosine, step, plateau
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+
+  # Data loading
+  num_workers: 4
+  pin_memory: true
+
+# ============ Loss Configuration ============
+loss:
+  # Loss weights (for full training stage)
+  lambda_cls: 1.0       # Classification loss
+  lambda_am: 0.5        # Attention mining loss
+  lambda_loc: 0.3       # Localization loss
+  lambda_guide: 0.5     # Guided attention loss
+  lambda_cf: 0.3        # Counterfactual loss
+  lambda_consist: 0.2   # Consistency loss
+
+  # Focal loss parameters
+  focal_gamma: 2.0
+  focal_alpha: 0.25
+
+# ============ Evaluation Configuration ============
+evaluation:
+  eval_interval: 1  # Evaluate every N epochs
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1
+    - auc_roc
+    - cam_iou
+    - loc_iou
+  threshold: 0.5
+
+# ============ Logging & Checkpointing ============
+logging:
+  log_interval: 10  # Log every N batches
+  use_wandb: false
+  wandb_project: "gain-mtl-defect"
+  wandb_entity: null
+  use_tensorboard: true
+  tensorboard_dir: "./runs"
+
+checkpoint:
+  save_interval: 5  # Save checkpoint every N epochs
+  checkpoint_dir: "./checkpoints"
+  save_best: true
+  save_last: true
+  keep_top_k: 3  # Keep top K checkpoints by metric
+
+# ============ Experiment Configuration ============
+experiment:
+  name: "gain_mtl_efficientnetv2s"
+  seed: 42
+  device: "cuda"  # Options: cuda, cpu, auto
+  deterministic: true
+
+# ============ Inference Configuration ============
+inference:
+  threshold: 0.5
+  batch_size: 32
+  tta: false  # Test-time augmentation
