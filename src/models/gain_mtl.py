@@ -67,6 +67,23 @@ class GAINMTLModel(nn.Module):
     └───────┘  └───────┘
     ```
 
+    Training vs Inference:
+    ```
+    Training:
+    ├── cls_logits          → cls_loss (baseline, for comparison)
+    ├── attended_cls_logits → am_loss (main classification output)
+    ├── attention_map       → guide_loss (supervised to match GT mask)
+    └── localization_map    → loc_loss (auxiliary task, improves backbone)
+
+    Inference:
+    ├── attended_cls_logits → Final classification output
+    └── attention_map       → CAM for interpretability
+    ```
+
+    The localization head serves as an auxiliary task during training,
+    helping the backbone learn better spatial features. At inference time,
+    only attended_cls_logits (classification) and attention_map (CAM) are used.
+
     Args:
         backbone_name: Name of EfficientNetV2 variant
         num_classes: Number of classification classes (default: 2 for binary)
@@ -252,13 +269,22 @@ class GAINMTLModel(nn.Module):
         )
 
         # ============ Build Output Dictionary ============
+        # Training outputs:
+        #   - cls_logits: baseline classification (without attention)
+        #   - attended_cls_logits: main classification (with attention, use for inference)
+        #   - attention_map: CAM supervised by GT mask (use for inference)
+        #   - localization_map: auxiliary task output (training only)
         outputs = {
-            'cls_logits': cls_logits,
-            'attended_cls_logits': attended_cls_logits,
-            'attention_map': combined_attention,
+            # Main outputs (used at inference)
+            'attended_cls_logits': attended_cls_logits,  # Main classification output
+            'attention_map': combined_attention,          # CAM for interpretability
+            # Baseline outputs (for comparison/ablation)
+            'cls_logits': cls_logits,                     # Baseline without attention
+            # Auxiliary outputs (training only)
+            'localization_map': localization_map,         # Auxiliary task
             'attention_map_main': attention_map,
             'attention_map_mined': mined_attention,
-            'localization_map': localization_map,
+            # Internal features (for advanced use)
             'features': final_features,
             'attended_features': attended_features,
             'cls_features': cls_features,
@@ -317,9 +343,12 @@ class GAINMTLModel(nn.Module):
         """
         Make predictions with confidence scores.
 
+        Uses attended_cls_logits as the main classification output,
+        which leverages attention guided by GT mask during training.
+
         Args:
             x: Input images (B, 3, H, W)
-            threshold: Classification threshold
+            threshold: Threshold for CAM-based defect detection
 
         Returns:
             Dictionary with predictions and confidence
@@ -327,21 +356,20 @@ class GAINMTLModel(nn.Module):
         with torch.no_grad():
             outputs = self.forward(x)
 
-            # Classification prediction
-            probs = F.softmax(outputs['cls_logits'], dim=1)
+            # Classification prediction (using attended logits - main output)
+            probs = F.softmax(outputs['attended_cls_logits'], dim=1)
             confidence, predictions = probs.max(dim=1)
 
-            # Localization
-            loc_map = outputs['localization_map']
-            defect_detected = (loc_map > threshold).any(dim=[1, 2, 3])
+            # CAM-based defect detection
+            cam = outputs['attention_map']
+            defect_detected = (cam > threshold).any(dim=[1, 2, 3])
 
         return {
             'predictions': predictions,
             'confidence': confidence,
             'probabilities': probs,
+            'cam': cam,  # Attention map as CAM
             'defect_detected': defect_detected,
-            'attention_map': outputs['attention_map'],
-            'localization_map': loc_map,
         }
 
     def get_explanation(
@@ -350,6 +378,9 @@ class GAINMTLModel(nn.Module):
     ) -> Dict[str, Any]:
         """
         Generate comprehensive explanation for prediction.
+
+        Uses attended_cls_logits as the main prediction output.
+        Returns CAM (attention_map) for interpretability.
 
         Args:
             x: Input image (1, 3, H, W) - single image
@@ -362,31 +393,30 @@ class GAINMTLModel(nn.Module):
         with torch.no_grad():
             outputs = self.forward(x)
 
-            # Upsample maps to input resolution
+            # Upsample CAM to input resolution
             input_size = x.shape[2:]
-            attention_up = F.interpolate(
+            cam_up = F.interpolate(
                 outputs['attention_map'], size=input_size,
                 mode='bilinear', align_corners=False
             )
-            loc_up = outputs['localization_map']  # Already at input size
 
-            # Classification
-            probs = F.softmax(outputs['cls_logits'], dim=1)
+            # Main classification (attended - uses attention guided by mask)
+            probs = F.softmax(outputs['attended_cls_logits'], dim=1)
             pred_class = probs.argmax(dim=1).item()
             pred_conf = probs[0, pred_class].item()
 
-            # Attended classification
-            attended_probs = F.softmax(outputs['attended_cls_logits'], dim=1)
-            attended_pred = attended_probs.argmax(dim=1).item()
+            # Baseline classification (without attention, for comparison)
+            baseline_probs = F.softmax(outputs['cls_logits'], dim=1)
+            baseline_pred = baseline_probs.argmax(dim=1).item()
 
         return {
             'prediction': pred_class,
             'confidence': pred_conf,
             'probabilities': probs.squeeze().cpu().numpy(),
-            'attended_prediction': attended_pred,
-            'attention_map': attention_up.squeeze().cpu().numpy(),
-            'localization_map': loc_up.squeeze().cpu().numpy(),
-            'consistency': pred_class == attended_pred,
+            'cam': cam_up.squeeze().cpu().numpy(),
+            'baseline_prediction': baseline_pred,
+            'baseline_probabilities': baseline_probs.squeeze().cpu().numpy(),
+            'consistency': pred_class == baseline_pred,
         }
 
 
