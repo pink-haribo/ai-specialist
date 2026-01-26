@@ -226,6 +226,9 @@ def main():
         save_interval=config['checkpoint']['save_interval'],
         checkpoint_dir=str(exp_dir),
         device=str(device),
+        # TensorBoard settings
+        use_tensorboard=config['logging'].get('use_tensorboard', True),
+        tensorboard_dir=config['logging'].get('tensorboard_dir', './runs'),
     )
 
     # Setup logger
@@ -250,6 +253,7 @@ def main():
         scheduler=scheduler,
         config=training_config,
         logger=logger,
+        experiment_name=config['experiment']['name'],
     )
 
     # ============ Resume from Checkpoint ============

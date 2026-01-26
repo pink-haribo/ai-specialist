@@ -24,12 +24,159 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.tensorboard import SummaryWriter
 
 import numpy as np
 from tqdm import tqdm
 
 from ..models import GAINMTLModel
 from ..losses import GAINMTLLoss
+
+
+class TensorBoardLogger:
+    """
+    TensorBoard Logger for training metrics visualization.
+
+    Logs:
+    - Training/Validation losses (total, cls, am, loc, guide, cf, consist)
+    - Metrics (accuracy, CAM-IoU, learning rate)
+    - Training stage transitions
+    - Histograms (optional)
+    """
+
+    def __init__(self, log_dir: str, experiment_name: str = ""):
+        """
+        Initialize TensorBoard logger.
+
+        Args:
+            log_dir: Directory for TensorBoard logs
+            experiment_name: Name of the experiment (subdirectory)
+        """
+        self.log_dir = os.path.join(log_dir, experiment_name) if experiment_name else log_dir
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        print(f'TensorBoard logging to: {self.log_dir}')
+        print(f'Run `tensorboard --logdir={log_dir}` to view')
+
+    def log_scalar(self, tag: str, value: float, step: int):
+        """Log a scalar value."""
+        self.writer.add_scalar(tag, value, step)
+
+    def log_scalars(self, main_tag: str, tag_scalar_dict: Dict[str, float], step: int):
+        """Log multiple scalars under one main tag."""
+        self.writer.add_scalars(main_tag, tag_scalar_dict, step)
+
+    def log_histogram(self, tag: str, values: torch.Tensor, step: int):
+        """Log a histogram of tensor values."""
+        self.writer.add_histogram(tag, values, step)
+
+    def log_image(self, tag: str, img_tensor: torch.Tensor, step: int):
+        """Log an image."""
+        self.writer.add_image(tag, img_tensor, step)
+
+    def log_images(self, tag: str, img_tensor: torch.Tensor, step: int):
+        """Log multiple images as a grid."""
+        from torchvision.utils import make_grid
+        grid = make_grid(img_tensor, normalize=True)
+        self.writer.add_image(tag, grid, step)
+
+    def log_figure(self, tag: str, figure, step: int):
+        """Log a matplotlib figure."""
+        self.writer.add_figure(tag, figure, step)
+
+    def log_text(self, tag: str, text: str, step: int):
+        """Log text."""
+        self.writer.add_text(tag, text, step)
+
+    def log_hparams(self, hparam_dict: Dict[str, Any], metric_dict: Dict[str, float]):
+        """Log hyperparameters with their associated metrics."""
+        self.writer.add_hparams(hparam_dict, metric_dict)
+
+    def log_training_step(
+        self,
+        losses: Dict[str, float],
+        step: int,
+        learning_rate: float,
+        stage: int = None,
+    ):
+        """
+        Log training step metrics.
+
+        Args:
+            losses: Dictionary of loss values
+            step: Global step
+            learning_rate: Current learning rate
+            stage: Current training stage (optional)
+        """
+        # Log individual losses
+        for name, value in losses.items():
+            self.log_scalar(f'train/loss_{name}', value, step)
+
+        # Log learning rate
+        self.log_scalar('train/learning_rate', learning_rate, step)
+
+        # Log stage if provided
+        if stage is not None:
+            self.log_scalar('train/stage', stage, step)
+
+    def log_epoch(
+        self,
+        train_losses: Dict[str, float],
+        val_metrics: Dict[str, float],
+        epoch: int,
+        learning_rate: float,
+        stage: int = None,
+    ):
+        """
+        Log epoch-level metrics.
+
+        Args:
+            train_losses: Dictionary of training losses
+            val_metrics: Dictionary of validation metrics
+            epoch: Current epoch
+            learning_rate: Current learning rate
+            stage: Current training stage
+        """
+        # Training losses
+        for name, value in train_losses.items():
+            self.log_scalar(f'epoch/train_{name}', value, epoch)
+
+        # Validation metrics
+        for name, value in val_metrics.items():
+            self.log_scalar(f'epoch/val_{name}', value, epoch)
+
+        # Learning rate
+        self.log_scalar('epoch/learning_rate', learning_rate, epoch)
+
+        # Stage
+        if stage is not None:
+            self.log_scalar('epoch/stage', stage, epoch)
+
+        # Combined loss comparison
+        if 'total' in train_losses and 'val_total' in val_metrics:
+            self.log_scalars('compare/loss', {
+                'train': train_losses['total'],
+                'val': val_metrics['val_total'],
+            }, epoch)
+
+    def log_model_gradients(self, model: nn.Module, step: int):
+        """Log model gradient statistics."""
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                self.log_histogram(f'gradients/{name}', param.grad, step)
+
+    def log_model_weights(self, model: nn.Module, step: int):
+        """Log model weight statistics."""
+        for name, param in model.named_parameters():
+            self.log_histogram(f'weights/{name}', param, step)
+
+    def flush(self):
+        """Flush the writer."""
+        self.writer.flush()
+
+    def close(self):
+        """Close the writer."""
+        self.writer.close()
 
 
 @dataclass
@@ -62,6 +209,10 @@ class TrainingConfig:
     save_interval: int = 5
     checkpoint_dir: str = 'checkpoints'
 
+    # TensorBoard
+    use_tensorboard: bool = True
+    tensorboard_dir: str = './runs'
+
     # Device
     device: str = 'cuda'
 
@@ -75,6 +226,7 @@ class GAINMTLTrainer:
     - Loss computation
     - Metric tracking
     - Checkpointing
+    - TensorBoard logging
 
     Args:
         model: GAIN-MTL model instance
@@ -82,7 +234,9 @@ class GAINMTLTrainer:
         optimizer: Optimizer
         scheduler: Learning rate scheduler (optional)
         config: Training configuration
-        logger: Logger for tracking metrics (optional)
+        logger: Logger for tracking metrics (optional, e.g., W&B)
+        tb_logger: TensorBoardLogger instance (optional)
+        experiment_name: Name for TensorBoard experiment (optional)
     """
 
     def __init__(
@@ -93,13 +247,26 @@ class GAINMTLTrainer:
         scheduler: Optional[_LRScheduler] = None,
         config: Optional[TrainingConfig] = None,
         logger: Optional[Any] = None,
+        tb_logger: Optional[TensorBoardLogger] = None,
+        experiment_name: str = "",
     ):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.config = config or TrainingConfig()
-        self.logger = logger
+        self.logger = logger  # W&B or other logger
+
+        # TensorBoard setup
+        if tb_logger is not None:
+            self.tb_logger = tb_logger
+        elif self.config.use_tensorboard:
+            self.tb_logger = TensorBoardLogger(
+                log_dir=self.config.tensorboard_dir,
+                experiment_name=experiment_name,
+            )
+        else:
+            self.tb_logger = None
 
         # Device setup
         self.device = torch.device(
@@ -202,10 +369,20 @@ class GAINMTLTrainer:
                     'cls': f"{losses['cls'].item():.4f}",
                 })
 
+                # TensorBoard: Log batch-level losses
+                if self.tb_logger is not None:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    self.tb_logger.log_training_step(
+                        losses={k: v.item() for k, v in losses.items()},
+                        step=self.global_step,
+                        learning_rate=current_lr,
+                        stage=getattr(self, 'current_stage', None),
+                    )
+
         # Compute averages
         avg_losses = {k: np.mean(v) for k, v in total_losses.items()}
 
-        # Log to logger if available
+        # Log to W&B logger if available
         if self.logger is not None:
             for key, value in avg_losses.items():
                 self.logger.log({f'train/{key}': value}, step=epoch)
@@ -284,10 +461,15 @@ class GAINMTLTrainer:
             **{f'val_{k}': v for k, v in avg_losses.items()}
         }
 
-        # Log to logger if available
+        # Log to W&B logger if available
         if self.logger is not None:
             for key, value in metrics.items():
                 self.logger.log({f'val/{key}': value}, step=epoch)
+
+        # TensorBoard: Log validation metrics
+        if self.tb_logger is not None:
+            for key, value in metrics.items():
+                self.tb_logger.log_scalar(f'val/{key}', value, epoch)
 
         return metrics
 
@@ -514,6 +696,18 @@ class MultiStageTrainer(GAINMTLTrainer):
                 print(f'  Val Accuracy: {val_metrics["accuracy"]:.4f}')
                 print(f'  Val CAM-IoU: {val_metrics["cam_iou"]:.4f}')
 
+                # TensorBoard: Log epoch-level metrics
+                if self.tb_logger is not None:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    self.tb_logger.log_epoch(
+                        train_losses=train_losses,
+                        val_metrics=val_metrics,
+                        epoch=epoch,
+                        learning_rate=current_lr,
+                        stage=self.current_stage,
+                    )
+                    self.tb_logger.flush()
+
                 # Save best model
                 if val_metrics['accuracy'] > self.best_metric:
                     self.best_metric = val_metrics['accuracy']
@@ -541,5 +735,10 @@ class MultiStageTrainer(GAINMTLTrainer):
             num_epochs - 1,
             val_metrics
         )
+
+        # Close TensorBoard logger
+        if self.tb_logger is not None:
+            self.tb_logger.close()
+            print(f'\nTensorBoard logs saved to: {self.tb_logger.log_dir}')
 
         return history
