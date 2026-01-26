@@ -25,8 +25,8 @@ runs/
 *.pth
 *.pt
 
-# Data
-data/
+# Data (root level only, not src/data/)
+/data/
 *.zip
 *.tar.gz
 
