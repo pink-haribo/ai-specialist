@@ -119,10 +119,14 @@ class EfficientNetV2Backbone(nn.Module):
                 )
 
         # Create mmpretrain EfficientNetV2 backbone
+        # mmpretrain의 EfficientNetV2는 frozen_stages=-1을 허용하지 않음
+        # -1은 "아무것도 freeze하지 않음"을 의미하므로 0으로 변환
+        mm_frozen_stages = 0 if frozen_stages < 0 else frozen_stages
+
         self.backbone = MMEfficientNetV2(
             arch=self.arch,
             out_indices=out_indices,
-            frozen_stages=frozen_stages,
+            frozen_stages=mm_frozen_stages,
             drop_path_rate=drop_path_rate,
             init_cfg=init_cfg,
         )
