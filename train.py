@@ -16,6 +16,8 @@ Usage:
     python train.py --config configs/default.yaml --strategies 4  # Train only strategy 4
 
 Backbone options (mmpretrain):
+    b0  - EfficientNetV2-B0
+    b1  - EfficientNetV2-B1
     s   - EfficientNetV2-S (Small)
     m   - EfficientNetV2-M (Medium)
     l   - EfficientNetV2-L (Large)
@@ -115,8 +117,8 @@ def parse_args():
     parser.add_argument('--data_root', type=str, default=None,
                         help='Override data root directory')
     parser.add_argument('--backbone', type=str, default=None,
-                        choices=['s', 'm', 'l', 'xl'],
-                        help='Override backbone arch (s/m/l/xl for EfficientNetV2)')
+                        choices=['b0', 'b1', 's', 'm', 'l', 'xl'],
+                        help='Override backbone arch (b0/b1/s/m/l/xl for EfficientNetV2)')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override batch size')
     parser.add_argument('--epochs', type=int, default=None,

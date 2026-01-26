@@ -415,6 +415,30 @@ def build_gain_mtl_model(
 
 
 # Convenience aliases for different model sizes
+class GAINMTLB0(GAINMTLModel):
+    """GAIN-MTL with EfficientNetV2-B0 backbone (mmpretrain)."""
+    def __init__(self, num_classes: int = 2, **kwargs):
+        super().__init__(
+            backbone_arch='b0',
+            num_classes=num_classes,
+            fpn_channels=128,
+            attention_channels=192,
+            **kwargs
+        )
+
+
+class GAINMTLB1(GAINMTLModel):
+    """GAIN-MTL with EfficientNetV2-B1 backbone (mmpretrain)."""
+    def __init__(self, num_classes: int = 2, **kwargs):
+        super().__init__(
+            backbone_arch='b1',
+            num_classes=num_classes,
+            fpn_channels=128,
+            attention_channels=208,
+            **kwargs
+        )
+
+
 class GAINMTLSmall(GAINMTLModel):
     """GAIN-MTL with EfficientNetV2-S backbone (mmpretrain)."""
     def __init__(self, num_classes: int = 2, **kwargs):
