@@ -4,7 +4,7 @@
 # ============ Model Configuration ============
 model:
   # EfficientNetV2 backbone (via mmpretrain)
-  backbone_arch: "s"  # Options: s, m, l, xl (EfficientNetV2 variants)
+  backbone_arch: "s"  # Options: b0, b1, s, m, l, xl (EfficientNetV2 variants)
   out_indices: [1, 2, 3, 4]  # Feature extraction stages
   num_classes: 2
   pretrained: true

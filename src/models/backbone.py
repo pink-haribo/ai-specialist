@@ -8,9 +8,12 @@ mmpretrain 설치:
     pip install mmpretrain
 
 사용 가능한 EfficientNetV2 모델:
+    - efficientnetv2-b0: EfficientNetV2-B0
+    - efficientnetv2-b1: EfficientNetV2-B1
     - efficientnetv2-s: EfficientNetV2-S (Small)
     - efficientnetv2-m: EfficientNetV2-M (Medium)
     - efficientnetv2-l: EfficientNetV2-L (Large)
+    - efficientnetv2-xl: EfficientNetV2-XL (Extra Large)
 """
 
 from typing import Dict, List, Optional, Tuple, Union
@@ -34,14 +37,14 @@ class EfficientNetV2Backbone(nn.Module):
     Extracts multi-scale features for FPN-style processing.
 
     Args:
-        arch: Architecture variant ('s', 'm', 'l', 'xl')
+        arch: Architecture variant ('b0', 'b1', 's', 'm', 'l', 'xl')
         out_indices: Indices of stages to output features from (0-indexed)
         frozen_stages: Number of stages to freeze (-1 = none)
         pretrained: Whether to use pretrained weights or path to checkpoint
         init_cfg: Initialization config (for mmpretrain compatibility)
 
     Example:
-        >>> backbone = EfficientNetV2Backbone(arch='s', out_indices=(1, 2, 3, 4))
+        >>> backbone = EfficientNetV2Backbone(arch='b0', out_indices=(1, 2, 3, 4))
         >>> x = torch.randn(1, 3, 512, 512)
         >>> features = backbone(x)
         >>> for f in features:
@@ -49,10 +52,18 @@ class EfficientNetV2Backbone(nn.Module):
     """
 
     # EfficientNetV2 architecture specifications
-    # arch: (expand_ratio, channels, num_blocks, stride, block_type)
+    # stage_channels from mmpretrain EfficientNetV2
     ARCH_SETTINGS = {
+        'b0': {
+            'stage_channels': [16, 32, 48, 96, 112, 192],
+            'out_channels': [16, 32, 48, 96, 112, 192],
+        },
+        'b1': {
+            'stage_channels': [16, 32, 48, 96, 128, 208],
+            'out_channels': [16, 32, 48, 96, 128, 208],
+        },
         's': {
-            'stage_channels': [24, 48, 64, 128, 160, 256],  # channels after each stage
+            'stage_channels': [24, 48, 64, 128, 160, 256],
             'out_channels': [24, 48, 64, 128, 160, 256],
         },
         'm': {
@@ -71,6 +82,8 @@ class EfficientNetV2Backbone(nn.Module):
 
     # Pretrained checkpoint URLs (mmpretrain에서 제공)
     PRETRAINED_URLS = {
+        'b0': 'https://download.openmmlab.com/mmclassification/v0/efficientnetv2/efficientnetv2-b0_3rdparty_in1k_20221221-9ef6e736.pth',
+        'b1': 'https://download.openmmlab.com/mmclassification/v0/efficientnetv2/efficientnetv2-b1_3rdparty_in1k_20221221-6955d9ce.pth',
         's': 'https://download.openmmlab.com/mmclassification/v0/efficientnetv2/efficientnetv2-s_3rdparty_in1k_20221220-f0eaff9d.pth',
         'm': 'https://download.openmmlab.com/mmclassification/v0/efficientnetv2/efficientnetv2-m_3rdparty_in1k_20221220-9dc0c729.pth',
         'l': 'https://download.openmmlab.com/mmclassification/v0/efficientnetv2/efficientnetv2-l_3rdparty_in1k_20221220-5c3bac0f.pth',
@@ -185,6 +198,8 @@ class EfficientNetV2BackboneFallback(nn.Module):
     """
 
     ARCH_TO_TIMM = {
+        'b0': 'tf_efficientnetv2_b0',
+        'b1': 'tf_efficientnetv2_b1',
         's': 'tf_efficientnetv2_s',
         'm': 'tf_efficientnetv2_m',
         'l': 'tf_efficientnetv2_l',
@@ -272,7 +287,7 @@ def get_backbone(
     Factory function to create EfficientNetV2 backbone.
 
     Args:
-        arch: Architecture variant ('s', 'm', 'l', 'xl')
+        arch: Architecture variant ('b0', 'b1', 's', 'm', 'l', 'xl')
         pretrained: Whether to use pretrained weights or path to checkpoint
         out_indices: Indices of stages to output features from
         frozen_stages: Number of stages to freeze (-1 = none)
@@ -302,6 +317,18 @@ def get_backbone(
 
 
 # Convenience classes
+class EfficientNetV2B0(EfficientNetV2Backbone if MMPRETRAIN_AVAILABLE else EfficientNetV2BackboneFallback):
+    """EfficientNetV2-B0 backbone."""
+    def __init__(self, pretrained: bool = True, **kwargs):
+        super().__init__(arch='b0', pretrained=pretrained, **kwargs)
+
+
+class EfficientNetV2B1(EfficientNetV2Backbone if MMPRETRAIN_AVAILABLE else EfficientNetV2BackboneFallback):
+    """EfficientNetV2-B1 backbone."""
+    def __init__(self, pretrained: bool = True, **kwargs):
+        super().__init__(arch='b1', pretrained=pretrained, **kwargs)
+
+
 class EfficientNetV2S(EfficientNetV2Backbone if MMPRETRAIN_AVAILABLE else EfficientNetV2BackboneFallback):
     """EfficientNetV2-S (Small) backbone."""
     def __init__(self, pretrained: bool = True, **kwargs):
