@@ -60,7 +60,7 @@ Pretrained weights는 자동으로 다운로드됩니다.
 
 ## 데이터 준비
 
-### 데이터 구조
+### 방법 1: train/val/test 디렉토리 분리 (기본)
 
 ```
 data/
@@ -73,14 +73,57 @@ data/
 │   │       ├── img_001.png
 │   │       └── ...
 │   ├── val/
-│   │   └── ...
+│   │   ├── normal/
+│   │   └── defective/
 │   └── test/
-│       └── ...
+│       ├── normal/
+│       └── defective/
 └── masks/
     └── defective/           # 결함 위치 마스크 (핵심!)
         ├── img_001.png      # 이미지와 같은 이름
         └── ...
 ```
+
+```bash
+# 기본 사용 (val_ratio=0.0)
+python train.py --data_root ./data
+```
+
+### 방법 2: train만 준비하고 자동 분할 (권장)
+
+val 디렉토리 없이 train 데이터만 준비하면, `--val_ratio` 옵션으로 자동 분할합니다.
+
+```
+data/
+├── images/
+│   ├── train/
+│   │   ├── normal/          # 양품 이미지
+│   │   │   ├── img_001.png
+│   │   │   └── ...
+│   │   └── defective/       # 불량 이미지
+│   │       ├── img_001.png
+│   │       └── ...
+│   └── test/
+│       ├── normal/
+│       └── defective/
+└── masks/
+    └── defective/           # 결함 위치 마스크
+        ├── img_001.png
+        └── ...
+```
+
+```bash
+# train의 20%를 validation으로 자동 분할
+python train.py --data_root ./data --val_ratio 0.2
+
+# seed 지정으로 재현 가능한 분할
+python train.py --data_root ./data --val_ratio 0.2 --seed 42
+```
+
+| val_ratio | 동작 |
+|-----------|------|
+| `0.0` (기본) | 별도 `val/` 디렉토리 사용 |
+| `0.1 ~ 0.3` | train 데이터를 랜덤 분할 (권장: 0.2) |
 
 ### 마스크 형식
 
@@ -128,12 +171,38 @@ python train.py --batch_size 32 --epochs 200
 # GPU 지정
 python train.py --device cuda:0
 
+# Train/Val 자동 분할 (val 디렉토리 없이 사용)
+python train.py --val_ratio 0.2
+
 # W&B 로깅 활성화
 python train.py --wandb
+
+# TensorBoard 비활성화
+python train.py --no_tensorboard
 
 # 체크포인트에서 재개
 python train.py --resume checkpoints/checkpoint_epoch_50.pth
 ```
+
+### TensorBoard로 학습 현황 모니터링
+
+학습 시 자동으로 TensorBoard 로그가 생성됩니다.
+
+```bash
+# 별도 터미널에서 TensorBoard 실행
+tensorboard --logdir=./runs
+
+# 브라우저에서 확인
+# http://localhost:6006
+```
+
+**모니터링 가능한 메트릭:**
+
+| 카테고리 | 메트릭 |
+|---------|--------|
+| `train/` | loss_total, loss_cls, loss_am, loss_loc, learning_rate, stage |
+| `val/` | accuracy, cam_iou, val_total, val_cls |
+| `compare/` | train vs val loss 비교 그래프 |
 
 ### Multi-Stage Training 전략
 
@@ -163,6 +232,12 @@ model:
   use_counterfactual: true
   freeze_backbone_stages: -1  # -1: 전체 학습, 0-4: 해당 stage까지 freeze
 
+data:
+  data_root: "./data"
+  dataset_type: "generic"     # generic, mvtec
+  image_size: [512, 512]
+  val_ratio: 0.0              # 0.0: val 디렉토리 사용, 0.1-0.3: 자동 분할
+
 loss:
   lambda_cls: 1.0       # Classification
   lambda_am: 0.5        # Attention Mining
@@ -179,6 +254,11 @@ training:
   stage2_ratio: 0.25
   stage3_ratio: 0.25
   stage4_ratio: 0.25
+
+logging:
+  use_tensorboard: true       # TensorBoard 활성화
+  tensorboard_dir: "./runs"   # 로그 저장 경로
+  use_wandb: false            # W&B 활성화
 ```
 
 ## 평가
