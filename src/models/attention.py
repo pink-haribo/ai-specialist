@@ -193,7 +193,7 @@ class GuidedAttentionModule(nn.Module):
         # Learnable temperature for attention sharpening
         self.temperature = nn.Parameter(torch.ones(1))
 
-        self._attention_map = None
+        self._attention_logits = None
 
     def forward(
         self,
@@ -208,27 +208,36 @@ class GuidedAttentionModule(nn.Module):
             return_attention: Whether to return the attention map
 
         Returns:
-            Tuple of (attended features, attention map)
+            Tuple of (attended features, attention logits)
+            Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss.
+                  Apply sigmoid externally when probability values are needed.
         """
         # Apply CBAM if enabled
         if self.use_cbam:
             x, _ = self.cbam(x)
 
-        # Generate attention map
-        attention_logits = self.attention_conv(x)
-        attention_map = torch.sigmoid(attention_logits / self.temperature)
+        # Generate attention logits (pre-sigmoid for numerical stability)
+        attention_logits = self.attention_conv(x) / self.temperature
 
         # Store for external access (e.g., visualization)
-        self._attention_map = attention_map
+        self._attention_logits = attention_logits
 
-        # Apply attention
+        # Apply attention using sigmoid for feature weighting
+        attention_map = torch.sigmoid(attention_logits)
         attended_features = x * attention_map
 
-        return attended_features, attention_map
+        # Return logits for loss computation (BCE with logits)
+        return attended_features, attention_logits
+
+    def get_attention_logits(self) -> Optional[torch.Tensor]:
+        """Return the last computed attention logits (pre-sigmoid)."""
+        return self._attention_logits
 
     def get_attention_map(self) -> Optional[torch.Tensor]:
-        """Return the last computed attention map."""
-        return self._attention_map
+        """Return the last computed attention map (with sigmoid applied)."""
+        if self._attention_logits is not None:
+            return torch.sigmoid(self._attention_logits)
+        return None
 
 
 class AttentionMiningHead(nn.Module):
@@ -249,6 +258,7 @@ class AttentionMiningHead(nn.Module):
     def __init__(self, in_channels: int, hidden_channels: int = 256):
         super().__init__()
 
+        # Note: No sigmoid at the end - returns logits for numerical stability
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_channels),
@@ -257,18 +267,17 @@ class AttentionMiningHead(nn.Module):
             nn.BatchNorm2d(hidden_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_channels, 1, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Generate attention heatmap.
+        Generate attention logits.
 
         Args:
             x: Input features (B, C, H, W)
 
         Returns:
-            Attention map (B, 1, H, W)
+            Attention logits (B, 1, H, W) - apply sigmoid externally for probability
         """
         return self.conv(x)
 

@@ -240,16 +240,17 @@ class GAINMTLModel(nn.Module):
         fpn_fused = self.fpn.get_fused_features(multi_scale_features)
 
         # ============ GAIN Attention ============
-        # Generate attention map through guided attention module
-        attended_features, attention_map = self.attention_module(
+        # Generate attention logits through guided attention module
+        # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
+        attended_features, attention_logits = self.attention_module(
             final_features, return_attention=True
         )
 
-        # Also generate attention through mining head (for comparison/ensemble)
-        mined_attention = self.attention_mining_head(final_features)
+        # Also generate attention logits through mining head (for comparison/ensemble)
+        mined_attention_logits = self.attention_mining_head(final_features)
 
-        # Combine attention maps (optional: use learned weights)
-        combined_attention = (attention_map + mined_attention) / 2
+        # Combine attention logits (optional: use learned weights)
+        combined_attention_logits = (attention_logits + mined_attention_logits) / 2
 
         # ============ Classification ============
         # Stream 1: Full features classification
@@ -264,26 +265,27 @@ class GAINMTLModel(nn.Module):
         )
 
         # ============ Localization ============
-        localization_map = self.localization_head(
+        # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
+        localization_logits = self.localization_head(
             fpn_fused, target_size=input_size
         )
 
         # ============ Build Output Dictionary ============
-        # Training outputs:
+        # Training outputs (all maps are logits for BCE with logits loss):
         #   - cls_logits: baseline classification (without attention)
         #   - attended_cls_logits: main classification (with attention, use for inference)
-        #   - attention_map: CAM supervised by GT mask (use for inference)
-        #   - localization_map: auxiliary task output (training only)
+        #   - attention_map: attention logits supervised by GT mask (apply sigmoid for CAM)
+        #   - localization_map: localization logits (training only, apply sigmoid for mask)
         outputs = {
-            # Main outputs (used at inference)
-            'attended_cls_logits': attended_cls_logits,  # Main classification output
-            'attention_map': combined_attention,          # CAM for interpretability
+            # Main outputs (used at inference - apply sigmoid for probabilities)
+            'attended_cls_logits': attended_cls_logits,      # Main classification output
+            'attention_map': combined_attention_logits,       # Attention logits (apply sigmoid for CAM)
             # Baseline outputs (for comparison/ablation)
-            'cls_logits': cls_logits,                     # Baseline without attention
-            # Auxiliary outputs (training only)
-            'localization_map': localization_map,         # Auxiliary task
-            'attention_map_main': attention_map,
-            'attention_map_mined': mined_attention,
+            'cls_logits': cls_logits,                         # Baseline without attention
+            # Auxiliary outputs (training only - logits for BCE with logits)
+            'localization_map': localization_logits,          # Localization logits
+            'attention_map_main': attention_logits,           # Main attention logits
+            'attention_map_mined': mined_attention_logits,    # Mined attention logits
             # Internal features (for advanced use)
             'features': final_features,
             'attended_features': attended_features,
@@ -292,10 +294,12 @@ class GAINMTLModel(nn.Module):
 
         # ============ Counterfactual (Training Only) ============
         if self.use_counterfactual and defect_mask is not None:
+            # Apply sigmoid to attention logits for counterfactual module
+            combined_attention_probs = torch.sigmoid(combined_attention_logits)
             cf_outputs = self.counterfactual_module(
                 final_features,
                 defect_mask,
-                combined_attention,
+                combined_attention_probs,
             )
             outputs['cf_logits'] = cf_outputs['cf_logits']
             outputs['cf_features'] = cf_outputs['cf_features']
@@ -319,11 +323,12 @@ class GAINMTLModel(nn.Module):
             upsample: Whether to upsample to input resolution
 
         Returns:
-            Attention map tensor
+            Attention map tensor (with sigmoid applied)
         """
         with torch.no_grad():
             outputs = self.forward(x, return_attention=True)
-            attention = outputs['attention_map']
+            # Apply sigmoid to convert logits to probabilities
+            attention = torch.sigmoid(outputs['attention_map'])
 
             if upsample:
                 attention = F.interpolate(
@@ -360,15 +365,15 @@ class GAINMTLModel(nn.Module):
             probs = F.softmax(outputs['attended_cls_logits'], dim=1)
             confidence, predictions = probs.max(dim=1)
 
-            # CAM-based defect detection
-            cam = outputs['attention_map']
+            # CAM-based defect detection (apply sigmoid to attention logits)
+            cam = torch.sigmoid(outputs['attention_map'])
             defect_detected = (cam > threshold).any(dim=[1, 2, 3])
 
         return {
             'predictions': predictions,
             'confidence': confidence,
             'probabilities': probs,
-            'cam': cam,  # Attention map as CAM
+            'cam': cam,  # Attention map as CAM (sigmoid applied)
             'defect_detected': defect_detected,
         }
 
@@ -380,7 +385,7 @@ class GAINMTLModel(nn.Module):
         Generate comprehensive explanation for prediction.
 
         Uses attended_cls_logits as the main prediction output.
-        Returns CAM (attention_map) for interpretability.
+        Returns CAM (attention_map with sigmoid) for interpretability.
 
         Args:
             x: Input image (1, 3, H, W) - single image
@@ -393,10 +398,11 @@ class GAINMTLModel(nn.Module):
         with torch.no_grad():
             outputs = self.forward(x)
 
-            # Upsample CAM to input resolution
+            # Apply sigmoid to attention logits and upsample CAM to input resolution
             input_size = x.shape[2:]
+            cam = torch.sigmoid(outputs['attention_map'])
             cam_up = F.interpolate(
-                outputs['attention_map'], size=input_size,
+                cam, size=input_size,
                 mode='bilinear', align_corners=False
             )
 
