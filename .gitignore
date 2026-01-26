@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Training outputs
+checkpoints/
+runs/
+*.pth
+*.pt
+
+# Data (root level only, not src/data/)
+/data/
+*.zip
+*.tar.gz
+
+# Logs
+*.log
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db

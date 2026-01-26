@@ -60,6 +60,8 @@ def parse_args():
                         help='Override learning rate')
     parser.add_argument('--device', type=str, default=None,
                         help='Override device')
+    parser.add_argument('--val_ratio', type=float, default=None,
+                        help='Ratio of training data for validation (0.0-1.0). If set, randomly splits train data.')
 
     # Experiment
     parser.add_argument('--name', type=str, default=None,
@@ -99,6 +101,8 @@ def main():
         config['experiment']['device'] = args.device
     if args.seed:
         config['experiment']['seed'] = args.seed
+    if args.val_ratio is not None:
+        config['data']['val_ratio'] = args.val_ratio
     if args.wandb:
         config['logging']['use_wandb'] = True
     if args.no_tensorboard:
@@ -140,6 +144,8 @@ def main():
         pin_memory=config['training']['pin_memory'],
         dataset_type=config['data']['dataset_type'],
         category=config['data'].get('category', 'bottle'),
+        val_ratio=config['data'].get('val_ratio', 0.0),
+        seed=config['experiment']['seed'],
     )
 
     print(f'Train batches: {len(train_loader)}')
@@ -226,6 +232,9 @@ def main():
         save_interval=config['checkpoint']['save_interval'],
         checkpoint_dir=str(exp_dir),
         device=str(device),
+        # TensorBoard settings
+        use_tensorboard=config['logging'].get('use_tensorboard', True),
+        tensorboard_dir=config['logging'].get('tensorboard_dir', './runs'),
     )
 
     # Setup logger
@@ -250,6 +259,7 @@ def main():
         scheduler=scheduler,
         config=training_config,
         logger=logger,
+        experiment_name=config['experiment']['name'],
     )
 
     # ============ Resume from Checkpoint ============

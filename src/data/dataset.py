@@ -21,7 +21,8 @@ import numpy as np
 import cv2
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import random_split
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
@@ -435,6 +436,58 @@ def get_transforms(
         ])
 
 
+class SubsetWithTransform(Subset):
+    """
+    Subset that allows overriding the transform of the underlying dataset.
+
+    This is useful when splitting a dataset into train/val and wanting
+    different augmentations for each split.
+    """
+
+    def __init__(self, dataset: Dataset, indices: List[int], transform: Optional[A.Compose] = None):
+        super().__init__(dataset, indices)
+        self.custom_transform = transform
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        # Get original sample info
+        original_idx = self.indices[idx]
+        sample = self.dataset.samples[original_idx]
+
+        # Load image
+        image = cv2.imread(sample['image_path'])
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Load mask
+        if sample.get('mask_path') and os.path.exists(sample['mask_path']):
+            mask = cv2.imread(sample['mask_path'], cv2.IMREAD_GRAYSCALE)
+            mask = (mask > 127).astype(np.float32) if mask.max() > 1 else mask.astype(np.float32)
+        else:
+            mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+
+        # Apply custom transform if provided, otherwise use dataset's transform
+        transform = self.custom_transform if self.custom_transform else self.dataset.transform
+        transformed = transform(image=image, mask=mask)
+        image = transformed['image']
+        mask = transformed['mask']
+
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)
+
+        result = {
+            'image': image,
+            'defect_mask': mask,
+            'label': torch.tensor(sample['label'], dtype=torch.long),
+            'has_defect': torch.tensor(sample.get('has_defect', sample['label'] == 1), dtype=torch.bool),
+            'image_path': sample['image_path'],
+        }
+
+        # Include defect_type if available (for MVTec)
+        if 'defect_type' in sample:
+            result['defect_type'] = sample['defect_type']
+
+        return result
+
+
 def create_dataloaders(
     data_root: str,
     batch_size: int = 16,
@@ -442,6 +495,8 @@ def create_dataloaders(
     num_workers: int = 4,
     pin_memory: bool = True,
     dataset_type: str = 'generic',
+    val_ratio: float = 0.0,
+    seed: int = 42,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
@@ -454,11 +509,17 @@ def create_dataloaders(
         num_workers: Number of data loading workers
         pin_memory: Whether to pin memory
         dataset_type: 'generic' or 'mvtec'
+        val_ratio: Ratio of training data to use for validation (0.0-1.0).
+                   If > 0, randomly splits train data instead of using separate val directory.
+        seed: Random seed for reproducible train/val split
         **kwargs: Additional arguments for dataset
 
     Returns:
         Tuple of (train_loader, val_loader, test_loader)
     """
+    # Set seed for reproducibility
+    generator = torch.Generator().manual_seed(seed)
+
     if dataset_type == 'mvtec':
         DatasetClass = MVTecDataset
         category = kwargs.get('category', 'bottle')
@@ -468,26 +529,93 @@ def create_dataloaders(
             transform=get_transforms('train', image_size),
             image_size=image_size
         )
-        # MVTec doesn't have val split, use test for both
-        val_dataset = DatasetClass(
+
+        if val_ratio > 0:
+            # Split train into train/val
+            total_size = len(train_dataset)
+            val_size = int(total_size * val_ratio)
+            train_size = total_size - val_size
+
+            print(f'\nSplitting train data: {train_size} train, {val_size} val (ratio={val_ratio})')
+
+            # Create indices for split
+            indices = list(range(total_size))
+            np.random.seed(seed)
+            np.random.shuffle(indices)
+            train_indices = indices[:train_size]
+            val_indices = indices[train_size:]
+
+            # Create subsets with appropriate transforms
+            train_subset = SubsetWithTransform(
+                train_dataset, train_indices,
+                transform=get_transforms('train', image_size)
+            )
+            val_subset = SubsetWithTransform(
+                train_dataset, val_indices,
+                transform=get_transforms('val', image_size)
+            )
+
+            train_dataset = train_subset
+            val_dataset = val_subset
+        else:
+            # MVTec doesn't have val split, use test for both
+            val_dataset = DatasetClass(
+                data_root, category, 'test',
+                transform=get_transforms('val', image_size),
+                image_size=image_size
+            )
+
+        test_dataset = DatasetClass(
             data_root, category, 'test',
-            transform=get_transforms('val', image_size),
+            transform=get_transforms('test', image_size),
             image_size=image_size
         )
-        test_dataset = val_dataset
     else:
         DatasetClass = DefectDataset
 
-        train_dataset = DatasetClass(
-            data_root, 'train',
-            transform=get_transforms('train', image_size),
-            image_size=image_size
-        )
-        val_dataset = DatasetClass(
-            data_root, 'val',
-            transform=get_transforms('val', image_size),
-            image_size=image_size
-        )
+        if val_ratio > 0:
+            # Load all training data and split randomly
+            full_train_dataset = DatasetClass(
+                data_root, 'train',
+                transform=get_transforms('train', image_size),
+                image_size=image_size
+            )
+
+            total_size = len(full_train_dataset)
+            val_size = int(total_size * val_ratio)
+            train_size = total_size - val_size
+
+            print(f'\nSplitting train data: {train_size} train, {val_size} val (ratio={val_ratio})')
+
+            # Create indices for split
+            indices = list(range(total_size))
+            np.random.seed(seed)
+            np.random.shuffle(indices)
+            train_indices = indices[:train_size]
+            val_indices = indices[train_size:]
+
+            # Create subsets with appropriate transforms
+            train_dataset = SubsetWithTransform(
+                full_train_dataset, train_indices,
+                transform=get_transforms('train', image_size)
+            )
+            val_dataset = SubsetWithTransform(
+                full_train_dataset, val_indices,
+                transform=get_transforms('val', image_size)
+            )
+        else:
+            # Use separate directories
+            train_dataset = DatasetClass(
+                data_root, 'train',
+                transform=get_transforms('train', image_size),
+                image_size=image_size
+            )
+            val_dataset = DatasetClass(
+                data_root, 'val',
+                transform=get_transforms('val', image_size),
+                image_size=image_size
+            )
+
         test_dataset = DatasetClass(
             data_root, 'test',
             transform=get_transforms('test', image_size),
