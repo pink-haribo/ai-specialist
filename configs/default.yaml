@@ -20,6 +20,7 @@ data:
   category: "bottle"  # For MVTec dataset
   image_size: [512, 512]
   augmentation_level: "medium"  # Options: light, medium, heavy
+  val_ratio: 0.0  # Ratio for random train/val split (0.0 = use separate val directory, 0.1-0.3 recommended)
 
 # ============ Training Configuration ============
 training:
