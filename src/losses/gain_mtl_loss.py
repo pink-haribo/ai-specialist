@@ -188,6 +188,104 @@ class IoULoss(nn.Module):
         return (1 - iou).mean()
 
 
+class CAMGuidanceLoss(nn.Module):
+    """
+    Loss for guiding Class Activation Map (CAM) to align with GT mask.
+
+    This is a simpler alternative to AttentionGuidanceLoss that works
+    directly with weight-based CAM from the classification head,
+    without requiring additional attention modules.
+
+    Key differences from AttentionGuidanceLoss:
+    - Works with CAM generated from classifier weights (no extra module)
+    - Only supervises defective samples (normal samples don't need CAM guidance)
+    - Simpler loss formulation: BCE + Dice
+
+    For defective samples: CAM should highlight defect regions (match GT mask)
+    For normal samples: No supervision (CAM naturally shows less activation)
+
+    Args:
+        alpha: Weight for BCE loss
+        use_dice: Whether to include Dice loss
+        use_iou: Whether to include IoU loss
+    """
+
+    def __init__(
+        self,
+        alpha: float = 1.0,
+        use_dice: bool = True,
+        use_iou: bool = False,
+    ):
+        super().__init__()
+        self.alpha = alpha
+        self.use_dice = use_dice
+        self.use_iou = use_iou
+        self.dice_loss = DiceLoss()
+        self.iou_loss = IoULoss()
+
+    def forward(
+        self,
+        cam: torch.Tensor,
+        defect_mask: torch.Tensor,
+        has_defect: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Compute CAM guidance loss.
+
+        Args:
+            cam: Model's CAM (B, 1, H, W), values in [0, 1]
+            defect_mask: Ground truth defect mask (B, 1, H, W)
+            has_defect: Boolean mask indicating defective samples (B,)
+
+        Returns:
+            Dictionary of loss components
+        """
+        losses = {}
+        device = cam.device
+
+        # Resize CAM to match mask size if needed
+        if cam.shape[2:] != defect_mask.shape[2:]:
+            cam_resized = F.interpolate(
+                cam,
+                size=defect_mask.shape[2:],
+                mode='bilinear',
+                align_corners=False
+            )
+        else:
+            cam_resized = cam
+
+        # === Loss for defective samples only ===
+        if has_defect.sum() > 0:
+            defect_cam = cam_resized[has_defect]
+            defect_gt = defect_mask[has_defect]
+
+            # BCE loss for pixel-wise alignment
+            bce_loss = F.binary_cross_entropy(
+                defect_cam,
+                defect_gt,
+                reduction='mean'
+            )
+            losses['cam_bce'] = self.alpha * bce_loss
+
+            # Dice loss for region overlap
+            if self.use_dice:
+                dice_loss = self.dice_loss(defect_cam, defect_gt)
+                losses['cam_dice'] = self.alpha * dice_loss
+
+            # IoU loss (optional)
+            if self.use_iou:
+                iou_loss = self.iou_loss(defect_cam, defect_gt)
+                losses['cam_iou'] = self.alpha * iou_loss
+        else:
+            losses['cam_bce'] = torch.tensor(0.0, device=device)
+            if self.use_dice:
+                losses['cam_dice'] = torch.tensor(0.0, device=device)
+            if self.use_iou:
+                losses['cam_iou'] = torch.tensor(0.0, device=device)
+
+        return losses
+
+
 class AttentionGuidanceLoss(nn.Module):
     """
     Loss for guiding attention to correct regions.
@@ -303,16 +401,25 @@ class GAINMTLLoss(nn.Module):
     Combines all loss components with configurable weights:
     - λ_cls: Classification loss weight
     - λ_am: Attention mining loss weight
+    - λ_cam_guide: CAM guidance loss weight (Strategy 2: weight-based CAM)
     - λ_loc: Localization loss weight
-    - λ_guide: Guided attention loss weight
+    - λ_guide: Guided attention loss weight (attention module)
     - λ_cf: Counterfactual loss weight
     - λ_consist: Consistency loss weight
+
+    Strategy Guide:
+    - Strategy 1: cls only
+    - Strategy 2: cls + cam_guide (weight-based CAM supervision)
+    - Strategy 3: cls + am + guide (attention mining)
+    - Strategy 4: cls + am + loc + guide (attention + localization)
+    - Strategy 5: Full (all losses including counterfactual)
 
     Args:
         lambda_cls: Weight for classification loss
         lambda_am: Weight for attention mining loss
+        lambda_cam_guide: Weight for CAM guidance loss (weight-based CAM)
         lambda_loc: Weight for localization loss
-        lambda_guide: Weight for guided attention loss
+        lambda_guide: Weight for guided attention loss (attention module)
         lambda_cf: Weight for counterfactual loss
         lambda_consist: Weight for consistency loss
         focal_gamma: Gamma parameter for focal loss
@@ -323,6 +430,7 @@ class GAINMTLLoss(nn.Module):
         self,
         lambda_cls: float = 1.0,
         lambda_am: float = 0.5,
+        lambda_cam_guide: float = 0.0,
         lambda_loc: float = 0.3,
         lambda_guide: float = 0.5,
         lambda_cf: float = 0.3,
@@ -335,6 +443,7 @@ class GAINMTLLoss(nn.Module):
         # Loss weights
         self.lambda_cls = lambda_cls
         self.lambda_am = lambda_am
+        self.lambda_cam_guide = lambda_cam_guide
         self.lambda_loc = lambda_loc
         self.lambda_guide = lambda_guide
         self.lambda_cf = lambda_cf
@@ -343,6 +452,7 @@ class GAINMTLLoss(nn.Module):
         # Component losses
         self.focal_loss = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
         self.dice_loss = DiceLoss()
+        self.cam_guidance_loss = CAMGuidanceLoss()
         self.attention_guidance_loss = AttentionGuidanceLoss()
 
     def forward(
@@ -357,7 +467,8 @@ class GAINMTLLoss(nn.Module):
             outputs: Model outputs dictionary containing:
                 - cls_logits: Classification logits
                 - attended_cls_logits: Attended classification logits
-                - attention_map: Attention map
+                - cam: Weight-based CAM from classifier (for Strategy 2)
+                - attention_map: Attention map from attention module
                 - localization_map: Localization map
                 - cf_logits: Counterfactual logits (optional)
 
@@ -384,8 +495,22 @@ class GAINMTLLoss(nn.Module):
         am_loss = self.focal_loss(outputs['attended_cls_logits'], labels)
         losses['am'] = self.lambda_am * am_loss
 
-        # ============ 3. Localization Loss ============
-        if has_defect.sum() > 0:
+        # ============ 3. CAM Guidance Loss (Strategy 2) ============
+        # Supervise weight-based CAM directly from classifier (no extra module)
+        if self.lambda_cam_guide > 0 and 'cam' in outputs:
+            cam_losses = self.cam_guidance_loss(
+                outputs['cam'],
+                defect_mask,
+                has_defect,
+            )
+            for key, value in cam_losses.items():
+                losses[f'cam_guide_{key}'] = self.lambda_cam_guide * value
+        else:
+            losses['cam_guide_cam_bce'] = torch.tensor(0.0, device=device)
+            losses['cam_guide_cam_dice'] = torch.tensor(0.0, device=device)
+
+        # ============ 4. Localization Loss ============
+        if self.lambda_loc > 0 and has_defect.sum() > 0:
             loc_map = outputs['localization_map']
 
             # Resize defect mask if needed
@@ -413,17 +538,23 @@ class GAINMTLLoss(nn.Module):
         else:
             losses['loc'] = torch.tensor(0.0, device=device)
 
-        # ============ 4. Guided Attention Loss ============
-        attention_losses = self.attention_guidance_loss(
-            outputs['attention_map'],
-            defect_mask,
-            has_defect,
-        )
-        for key, value in attention_losses.items():
-            losses[f'guide_{key}'] = self.lambda_guide * value
+        # ============ 5. Guided Attention Loss (attention module) ============
+        if self.lambda_guide > 0:
+            attention_losses = self.attention_guidance_loss(
+                outputs['attention_map'],
+                defect_mask,
+                has_defect,
+            )
+            for key, value in attention_losses.items():
+                losses[f'guide_{key}'] = self.lambda_guide * value
+        else:
+            losses['guide_attention_bce'] = torch.tensor(0.0, device=device)
+            losses['guide_attention_dice'] = torch.tensor(0.0, device=device)
+            losses['guide_attention_iou'] = torch.tensor(0.0, device=device)
+            losses['guide_attention_entropy'] = torch.tensor(0.0, device=device)
 
-        # ============ 5. Counterfactual Loss ============
-        if outputs['cf_logits'] is not None and has_defect.sum() > 0:
+        # ============ 7. Counterfactual Loss ============
+        if self.lambda_cf > 0 and outputs['cf_logits'] is not None and has_defect.sum() > 0:
             # Counterfactual should predict normal (class 0) for defective samples
             cf_logits = outputs['cf_logits']
 
@@ -435,9 +566,9 @@ class GAINMTLLoss(nn.Module):
         else:
             losses['cf'] = torch.tensor(0.0, device=device)
 
-        # ============ 6. Consistency Loss ============
+        # ============ 8. Consistency Loss ============
         # Attention map and localization map should be consistent for defective samples
-        if has_defect.sum() > 0:
+        if self.lambda_consist > 0 and has_defect.sum() > 0:
             attention_map = outputs['attention_map']
             loc_map = outputs['localization_map']
 
@@ -462,8 +593,10 @@ class GAINMTLLoss(nn.Module):
             losses['consist'] = torch.tensor(0.0, device=device)
 
         # ============ Total Loss ============
-        total_loss = sum(v for k, v in losses.items() if not k.startswith('guide_'))
+        total_loss = sum(v for k, v in losses.items()
+                        if not k.startswith('guide_') and not k.startswith('cam_guide_'))
         total_loss += sum(v for k, v in losses.items() if k.startswith('guide_'))
+        total_loss += sum(v for k, v in losses.items() if k.startswith('cam_guide_'))
         losses['total'] = total_loss
 
         return losses
@@ -472,6 +605,7 @@ class GAINMTLLoss(nn.Module):
         self,
         lambda_cls: Optional[float] = None,
         lambda_am: Optional[float] = None,
+        lambda_cam_guide: Optional[float] = None,
         lambda_loc: Optional[float] = None,
         lambda_guide: Optional[float] = None,
         lambda_cf: Optional[float] = None,
@@ -482,6 +616,8 @@ class GAINMTLLoss(nn.Module):
             self.lambda_cls = lambda_cls
         if lambda_am is not None:
             self.lambda_am = lambda_am
+        if lambda_cam_guide is not None:
+            self.lambda_cam_guide = lambda_cam_guide
         if lambda_loc is not None:
             self.lambda_loc = lambda_loc
         if lambda_guide is not None:
@@ -497,6 +633,7 @@ def build_loss(config: Dict) -> GAINMTLLoss:
     return GAINMTLLoss(
         lambda_cls=config.get('lambda_cls', 1.0),
         lambda_am=config.get('lambda_am', 0.5),
+        lambda_cam_guide=config.get('lambda_cam_guide', 0.0),
         lambda_loc=config.get('lambda_loc', 0.3),
         lambda_guide=config.get('lambda_guide', 0.5),
         lambda_cf=config.get('lambda_cf', 0.3),

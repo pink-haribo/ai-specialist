@@ -69,15 +69,24 @@ class GAINMTLModel(nn.Module):
 
     Training vs Inference:
     ```
+    Strategy Guide:
+    - Strategy 1: cls only
+    - Strategy 2: cls + cam_guide (weight-based CAM supervision)
+    - Strategy 3: cls + am + guide (attention mining)
+    - Strategy 4: cls + am + loc + guide (attention + localization)
+    - Strategy 5: Full (all losses including counterfactual)
+
     Training:
-    ├── cls_logits          → cls_loss (baseline, for comparison)
-    ├── attended_cls_logits → am_loss (main classification output)
-    ├── attention_map       → guide_loss (supervised to match GT mask)
-    └── localization_map    → loc_loss (auxiliary task, improves backbone)
+    ├── cls_logits          → cls_loss (baseline, all strategies)
+    ├── attended_cls_logits → am_loss (Strategy 3+)
+    ├── cam                 → cam_guide_loss (Strategy 2 only)
+    ├── attention_map       → guide_loss (Strategy 3+)
+    └── localization_map    → loc_loss (Strategy 4+)
 
     Inference:
     ├── attended_cls_logits → Final classification output
-    └── attention_map       → CAM for interpretability
+    ├── cam                 → Weight-based CAM (directly from classifier)
+    └── attention_map       → Attention module output
     ```
 
     The localization head serves as an auxiliary task during training,
@@ -220,7 +229,8 @@ class GAINMTLModel(nn.Module):
             Dictionary containing:
                 - cls_logits: Classification logits from main stream
                 - attended_cls_logits: Classification logits from attended stream
-                - attention_map: GAIN attention map
+                - cam: Weight-based CAM from classification head (no extra module)
+                - attention_map: GAIN attention map from attention module
                 - localization_map: Defect localization map
                 - features: Final backbone features
                 - attended_features: Attention-weighted features
@@ -257,6 +267,10 @@ class GAINMTLModel(nn.Module):
             final_features, return_features=True
         )
 
+        # Generate Weight-based CAM from classification head
+        # This CAM is directly derived from the classifier weights (no extra module)
+        cam = self.classification_head.get_cam(final_features, class_idx=1, normalize=True)
+
         # Stream 2: Attended features classification (GAIN core)
         attended_adapted = self.feature_adapter(attended_features)
         attended_cls_logits, _ = self.attended_classification_head(
@@ -272,12 +286,15 @@ class GAINMTLModel(nn.Module):
         # Training outputs:
         #   - cls_logits: baseline classification (without attention)
         #   - attended_cls_logits: main classification (with attention, use for inference)
-        #   - attention_map: CAM supervised by GT mask (use for inference)
+        #   - attention_map: Attention module output supervised by GT mask
+        #   - cam: Weight-based CAM from classifier (no extra module needed)
         #   - localization_map: auxiliary task output (training only)
         outputs = {
             # Main outputs (used at inference)
             'attended_cls_logits': attended_cls_logits,  # Main classification output
-            'attention_map': combined_attention,          # CAM for interpretability
+            'attention_map': combined_attention,          # Attention module output
+            # Weight-based CAM (directly from classifier, for Strategy 2)
+            'cam': cam,                                   # CAM from classification head weights
             # Baseline outputs (for comparison/ablation)
             'cls_logits': cls_logits,                     # Baseline without attention
             # Auxiliary outputs (training only)
