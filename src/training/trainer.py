@@ -387,6 +387,13 @@ class GAINMTLTrainer:
             for key, value in avg_losses.items():
                 self.logger.log({f'train/{key}': value}, step=epoch)
 
+        # TensorBoard: Log epoch-level training losses
+        if self.tb_logger is not None:
+            current_lr = self.optimizer.param_groups[0]['lr']
+            for name, value in avg_losses.items():
+                self.tb_logger.log_scalar(f'epoch/train_{name}', value, epoch)
+            self.tb_logger.log_scalar('epoch/learning_rate', current_lr, epoch)
+
         return avg_losses
 
     @torch.no_grad()
@@ -683,12 +690,8 @@ class MultiStageTrainer(GAINMTLTrainer):
             train_losses = self.train_epoch(train_loader, epoch)
             history['train_loss'].append(train_losses['total'])
 
-            # TensorBoard: Log epoch-level training losses (every epoch)
+            # TensorBoard: Log current stage (train losses already logged in train_epoch)
             if self.tb_logger is not None:
-                current_lr = self.optimizer.param_groups[0]['lr']
-                for name, value in train_losses.items():
-                    self.tb_logger.log_scalar(f'epoch/train_{name}', value, epoch)
-                self.tb_logger.log_scalar('epoch/learning_rate', current_lr, epoch)
                 self.tb_logger.log_scalar('epoch/stage', self.current_stage, epoch)
 
             # Validate
