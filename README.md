@@ -224,7 +224,7 @@ tensorboard --logdir=./runs
 ```yaml
 model:
   backbone_arch: "s"          # s, m, l, xl
-  out_indices: [1, 2, 3, 4]   # Multi-scale feature 추출 stage
+  out_indices: [3, 4, 5, 6]   # Backbone 마지막 4개 stage (아키텍처에서 자동 계산)
   num_classes: 2
   pretrained: true
   fpn_channels: 256
@@ -295,7 +295,7 @@ Input Image (B, 3, H, W)
          ▼
 ┌─────────────────────────┐
 │  EfficientNetV2         │
-│  (mmpretrain backbone)  │ ──► Multi-scale features [P1, P2, P3, P4]
+│  (mmpretrain backbone)  │ ──► Multi-scale features (last 4 stages)
 └─────────────────────────┘
               │
               ▼

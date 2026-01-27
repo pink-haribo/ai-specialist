@@ -497,7 +497,7 @@ def build_gain_mtl_model(
         attention_channels=config.get('attention_channels', 512),
         use_counterfactual=config.get('use_counterfactual', True),
         freeze_backbone_stages=config.get('freeze_backbone_stages', -1),
-        out_indices=tuple(config.get('out_indices', [1, 2, 3, 4])),
+        out_indices=tuple(config.get('out_indices', [3, 4, 5, 6])),
     )
 
 

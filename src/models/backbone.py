@@ -44,7 +44,7 @@ class EfficientNetV2Backbone(nn.Module):
         init_cfg: Initialization config (for mmpretrain compatibility)
 
     Example:
-        >>> backbone = EfficientNetV2Backbone(arch='b0', out_indices=(1, 2, 3, 4))
+        >>> backbone = EfficientNetV2Backbone(arch='b0', out_indices=(3, 4, 5, 6))
         >>> x = torch.randn(1, 3, 512, 512)
         >>> features = backbone(x)
         >>> for f in features:
