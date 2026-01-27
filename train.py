@@ -2,18 +2,19 @@
 """
 Training Script for GAIN-MTL - Multi-Strategy Comparison
 
-Trains 4 separate models, each with a different loss strategy:
+Trains 5 separate models, each with a different loss strategy:
     - Strategy 1: Classification only
-    - Strategy 2: Classification + Attention Mining
-    - Strategy 3: Classification + Attention Mining + Localization
-    - Strategy 4: Full (All losses including Counterfactual)
+    - Strategy 2: Classification + CAM Guidance (weight-based CAM supervised by GT mask)
+    - Strategy 3: Classification + Attention Mining
+    - Strategy 4: Classification + Attention Mining + Localization
+    - Strategy 5: Full (All losses including Counterfactual)
 
 This allows direct comparison of each strategy's performance.
 
 Usage:
     python train.py --config configs/default.yaml
-    python train.py --config configs/default.yaml --strategies 1 2 3 4
-    python train.py --config configs/default.yaml --strategies 4  # Train only strategy 4
+    python train.py --config configs/default.yaml --strategies 1 2 3 4 5
+    python train.py --config configs/default.yaml --strategies 5  # Train only strategy 5
 
 Backbone options (mmpretrain):
     b0  - EfficientNetV2-B0
@@ -53,12 +54,13 @@ from src.utils import set_seed, get_device, load_config, save_config, print_mode
 # Strategy Guide:
 # - Strategy 1: Classification only (baseline)
 # - Strategy 2: Classification + CAM Guidance (weight-based CAM supervised by GT mask)
-# - Strategy 3: Classification + Attention Module + Localization
-# - Strategy 4: Full (all losses including Counterfactual)
+# - Strategy 3: Classification + Attention Mining
+# - Strategy 4: Classification + Attention Mining + Localization
+# - Strategy 5: Full (all losses including Counterfactual)
 #
-# Key difference between Strategy 2 and 3:
+# Key difference between Strategy 2 and 3+:
 # - Strategy 2: Uses weight-based CAM directly from classifier (no extra module)
-# - Strategy 3: Uses attention module with guided attention loss
+# - Strategy 3+: Uses attention module with guided attention loss
 STRATEGY_CONFIGS = {
     1: {
         'name': 'classification_only',
@@ -78,34 +80,47 @@ STRATEGY_CONFIGS = {
         'description': 'Classification + CAM Guidance (weight-based CAM supervised by GT mask)',
         'weights': {
             'lambda_cls': 1.0,
-            'lambda_am': 0.5,
-            'lambda_cam_guide': 0.5,  # Weight-based CAM supervision
+            'lambda_am': 0.0,
+            'lambda_cam_guide': 0.5,
             'lambda_loc': 0.0,
-            'lambda_guide': 0.0,      # No attention module guidance
+            'lambda_guide': 0.0,
             'lambda_cf': 0.0,
             'lambda_consist': 0.0,
         }
     },
     3: {
-        'name': 'cls_attention_localization',
-        'description': 'Classification + Attention Module + Localization',
+        'name': 'cls_attention_mining',
+        'description': 'Classification + Attention Mining',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
-            'lambda_cam_guide': 0.0,  # No CAM guidance (using attention module instead)
+            'lambda_cam_guide': 0.0,
+            'lambda_loc': 0.0,
+            'lambda_guide': 0.3,
+            'lambda_cf': 0.0,
+            'lambda_consist': 0.0,
+        }
+    },
+    4: {
+        'name': 'cls_attention_localization',
+        'description': 'Classification + Attention Mining + Localization',
+        'weights': {
+            'lambda_cls': 1.0,
+            'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,
             'lambda_loc': 0.3,
-            'lambda_guide': 0.5,      # Attention module guidance
+            'lambda_guide': 0.5,
             'lambda_cf': 0.0,
             'lambda_consist': 0.2,
         }
     },
-    4: {
+    5: {
         'name': 'full',
         'description': 'Full training with all losses (including Counterfactual)',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
-            'lambda_cam_guide': 0.0,  # Disabled by default (use attention module)
+            'lambda_cam_guide': 0.0,
             'lambda_loc': 0.3,
             'lambda_guide': 0.5,
             'lambda_cf': 0.3,
@@ -123,9 +138,9 @@ def parse_args():
                         help='Path to config file')
 
     # Strategy selection
-    parser.add_argument('--strategies', type=int, nargs='+', default=[1, 2, 3, 4],
-                        choices=[1, 2, 3, 4],
-                        help='Which strategies to train (1-4). Default: all')
+    parser.add_argument('--strategies', type=int, nargs='+', default=[1, 2, 3, 4, 5],
+                        choices=[1, 2, 3, 4, 5],
+                        help='Which strategies to train (1-5). Default: all')
 
     # Override config options
     parser.add_argument('--data_root', type=str, default=None,
