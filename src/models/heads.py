@@ -107,8 +107,9 @@ class ClassificationHead(nn.Module):
 
         # Generate CAM: weighted sum of feature channels
         # features: (B, C, H, W), weights: (C,)
-        cam = torch.einsum('bchw,c->bhw', features, weights)  # (B, H, W)
-        cam = cam.unsqueeze(1)  # (B, 1, H, W)
+        # Using element-wise multiplication instead of einsum for CUDA stability
+        weights_expanded = weights.view(1, -1, 1, 1)  # (1, C, 1, 1)
+        cam = (features * weights_expanded).sum(dim=1, keepdim=True)  # (B, 1, H, W)
 
         if normalize:
             # Apply sigmoid for [0, 1] range (differentiable)
