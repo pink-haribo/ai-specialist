@@ -21,15 +21,18 @@ class ClassificationHead(nn.Module):
     """
     Classification Head for defect/non-defect prediction.
 
-    Features:
-    - Global Average Pooling
-    - Dropout for regularization
-    - Multi-layer classifier with optional intermediate features
+    Simplified single-layer design for CAM (Class Activation Map) compatibility.
+
+    Architecture:
+        Features (B, C, H, W) → GAP → Dropout → Linear → Logits (B, num_classes)
+
+    CAM Generation:
+        CAM = sum_c(w_c * F_c) where w_c is the weight for class k, F_c is feature channel c
+        This is differentiable and can be used for supervised CAM training.
 
     Args:
         in_channels: Number of input channels
         num_classes: Number of output classes (2 for binary)
-        hidden_dim: Hidden layer dimension
         dropout: Dropout probability
     """
 
@@ -37,32 +40,17 @@ class ClassificationHead(nn.Module):
         self,
         in_channels: int,
         num_classes: int = 2,
-        hidden_dim: int = 512,
+        hidden_dim: int = 512,  # Kept for backward compatibility, but unused
         dropout: float = 0.5,
     ):
         super().__init__()
 
+        self.in_channels = in_channels
+        self.num_classes = num_classes
+
         self.gap = nn.AdaptiveAvgPool2d(1)
-
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(in_channels, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
-        )
-
-        # For feature extraction before final classification
-        self.feature_extractor = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(in_channels, hidden_dim),
-            nn.ReLU(inplace=True),
-        )
-
-        self.final_classifier = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
-        )
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(in_channels, num_classes)
 
     def forward(
         self,
@@ -74,20 +62,59 @@ class ClassificationHead(nn.Module):
 
         Args:
             x: Input features (B, C, H, W)
-            return_features: Whether to return intermediate features
+            return_features: Whether to return pooled features
 
         Returns:
-            Tuple of (logits, optional features)
+            Tuple of (logits, optional pooled features)
         """
-        pooled = self.gap(x)
+        pooled = self.gap(x)  # (B, C, 1, 1)
+        pooled_flat = pooled.flatten(1)  # (B, C)
+
+        dropped = self.dropout(pooled_flat)
+        logits = self.fc(dropped)  # (B, num_classes)
 
         if return_features:
-            features = self.feature_extractor(pooled)
-            logits = self.final_classifier(features)
-            return logits, features
+            return logits, pooled_flat
         else:
-            logits = self.classifier(pooled)
             return logits, None
+
+    def get_cam(
+        self,
+        features: torch.Tensor,
+        class_idx: Optional[int] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        """
+        Generate Class Activation Map (CAM) from features.
+
+        CAM_k = sum_c(w_kc * F_c)
+
+        This is fully differentiable and can be used for training.
+
+        Args:
+            features: Feature maps from backbone (B, C, H, W)
+            class_idx: Class index for CAM. If None, uses class 1 (defect class)
+            normalize: Whether to normalize CAM to [0, 1]
+
+        Returns:
+            CAM tensor (B, 1, H, W)
+        """
+        if class_idx is None:
+            class_idx = 1  # Default to defect class for binary classification
+
+        # Get weights for the target class: (C,)
+        weights = self.fc.weight[class_idx]  # (C,)
+
+        # Generate CAM: weighted sum of feature channels
+        # features: (B, C, H, W), weights: (C,)
+        cam = torch.einsum('bchw,c->bhw', features, weights)  # (B, H, W)
+        cam = cam.unsqueeze(1)  # (B, 1, H, W)
+
+        if normalize:
+            # Apply sigmoid for [0, 1] range (differentiable)
+            cam = torch.sigmoid(cam)
+
+        return cam
 
 
 class LocalizationHead(nn.Module):

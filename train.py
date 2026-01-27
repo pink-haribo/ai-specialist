@@ -49,6 +49,16 @@ from src.utils import set_seed, get_device, load_config, save_config, print_mode
 
 
 # Strategy configurations (fixed loss weights for each strategy)
+#
+# Strategy Guide:
+# - Strategy 1: Classification only (baseline)
+# - Strategy 2: Classification + CAM Guidance (weight-based CAM supervised by GT mask)
+# - Strategy 3: Classification + Attention Module + Localization
+# - Strategy 4: Full (all losses including Counterfactual)
+#
+# Key difference between Strategy 2 and 3:
+# - Strategy 2: Uses weight-based CAM directly from classifier (no extra module)
+# - Strategy 3: Uses attention module with guided attention loss
 STRATEGY_CONFIGS = {
     1: {
         'name': 'classification_only',
@@ -56,6 +66,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.0,
+            'lambda_cam_guide': 0.0,
             'lambda_loc': 0.0,
             'lambda_guide': 0.0,
             'lambda_cf': 0.0,
@@ -63,25 +74,27 @@ STRATEGY_CONFIGS = {
         }
     },
     2: {
-        'name': 'cls_attention',
-        'description': 'Classification + Attention Mining',
+        'name': 'cls_cam_guidance',
+        'description': 'Classification + CAM Guidance (weight-based CAM supervised by GT mask)',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
+            'lambda_cam_guide': 0.5,  # Weight-based CAM supervision
             'lambda_loc': 0.0,
-            'lambda_guide': 0.3,
+            'lambda_guide': 0.0,      # No attention module guidance
             'lambda_cf': 0.0,
             'lambda_consist': 0.0,
         }
     },
     3: {
         'name': 'cls_attention_localization',
-        'description': 'Classification + Attention Mining + Localization',
+        'description': 'Classification + Attention Module + Localization',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,  # No CAM guidance (using attention module instead)
             'lambda_loc': 0.3,
-            'lambda_guide': 0.5,
+            'lambda_guide': 0.5,      # Attention module guidance
             'lambda_cf': 0.0,
             'lambda_consist': 0.2,
         }
@@ -92,6 +105,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,  # Disabled by default (use attention module)
             'lambda_loc': 0.3,
             'lambda_guide': 0.5,
             'lambda_cf': 0.3,
@@ -165,6 +179,7 @@ def create_criterion(config: dict, strategy_weights: dict) -> GAINMTLLoss:
     return GAINMTLLoss(
         lambda_cls=strategy_weights['lambda_cls'],
         lambda_am=strategy_weights['lambda_am'],
+        lambda_cam_guide=strategy_weights['lambda_cam_guide'],
         lambda_loc=strategy_weights['lambda_loc'],
         lambda_guide=strategy_weights['lambda_guide'],
         lambda_cf=strategy_weights['lambda_cf'],
