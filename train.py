@@ -184,7 +184,7 @@ def create_model(config: dict, device: torch.device) -> GAINMTLModel:
         attention_channels=config['model']['attention_channels'],
         use_counterfactual=config['model']['use_counterfactual'],
         freeze_backbone_stages=config['model']['freeze_backbone_stages'],
-        out_indices=tuple(config['model'].get('out_indices', [1, 2, 3, 4])),
+        out_indices=tuple(config['model'].get('out_indices', [3, 4, 5, 6])),
     )
     return model.to(device)
 

@@ -120,6 +120,20 @@ class GAINMTLModel(nn.Module):
         self.use_counterfactual = use_counterfactual
 
         # ============ Backbone (mmpretrain EfficientNetV2) ============
+        # Use the last 4 stages of the backbone for both FPN and classification.
+        # This ensures FPN gets deep multi-scale features and classification
+        # uses the deepest stage, matching standard detection/segmentation practice.
+        #
+        # EfficientNetV2 stage counts (stem + block stages):
+        #   B0/B1/S: 7 (indices 0-6) → last 4 = (3,4,5,6)
+        #   M/L/XL:  8 (indices 0-7) → last 4 = (4,5,6,7)
+        arch_settings = EfficientNetV2Backbone.ARCH_SETTINGS.get(backbone_arch.lower())
+        if arch_settings is not None:
+            num_stages = len(arch_settings['out_channels'])
+            last_stage_idx = num_stages - 1
+            num_fpn_levels = min(4, num_stages - 1)  # Exclude stem (index 0)
+            out_indices = tuple(range(last_stage_idx - num_fpn_levels + 1, last_stage_idx + 1))
+
         self.backbone = get_backbone(
             arch=backbone_arch,
             pretrained=pretrained,
@@ -130,6 +144,8 @@ class GAINMTLModel(nn.Module):
         final_channels = backbone_channels[-1]
 
         # ============ Feature Pyramid Network ============
+        # FPN uses all returned features (multi-scale);
+        # classification uses final_features (the deepest stage, also in FPN).
         self.fpn = FeaturePyramidNetwork(
             in_channels_list=backbone_channels,
             out_channels=fpn_channels,
@@ -259,9 +275,9 @@ class GAINMTLModel(nn.Module):
         input_size = x.shape[2:]  # (H, W)
 
         # ============ Feature Extraction ============
-        # Multi-scale features from backbone
+        # Multi-scale features from backbone (last 4 stages)
         multi_scale_features = self.backbone(x)
-        final_features = multi_scale_features[-1]  # Highest level features
+        final_features = multi_scale_features[-1]  # Deepest features for classification
 
         # ============ FPN Processing ============
         fpn_features = self.fpn(multi_scale_features)
@@ -481,7 +497,7 @@ def build_gain_mtl_model(
         attention_channels=config.get('attention_channels', 512),
         use_counterfactual=config.get('use_counterfactual', True),
         freeze_backbone_stages=config.get('freeze_backbone_stages', -1),
-        out_indices=tuple(config.get('out_indices', [1, 2, 3, 4])),
+        out_indices=tuple(config.get('out_indices', [3, 4, 5, 6])),
     )
 
 
