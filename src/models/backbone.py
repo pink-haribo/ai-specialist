@@ -52,31 +52,35 @@ class EfficientNetV2Backbone(nn.Module):
     """
 
     # EfficientNetV2 architecture specifications
-    # stage_channels from mmpretrain EfficientNetV2
+    # out_channels indexed by stage: index 0 = stem, index 1-6 = block stages
+    # This matches mmpretrain's out_indices where:
+    #   out_indices=0 -> stem output
+    #   out_indices=1 -> stage 1 output (first block)
+    #   out_indices=2 -> stage 2 output, etc.
     ARCH_SETTINGS = {
         'b0': {
-            'stage_channels': [16, 32, 48, 96, 112, 192],
-            'out_channels': [16, 32, 48, 96, 112, 192],
+            # stem=32, stages=[16, 32, 48, 96, 112, 192]
+            'out_channels': [32, 16, 32, 48, 96, 112, 192],
         },
         'b1': {
-            'stage_channels': [16, 32, 48, 96, 128, 208],
-            'out_channels': [16, 32, 48, 96, 128, 208],
+            # stem=32, stages=[16, 32, 48, 96, 128, 208]
+            'out_channels': [32, 16, 32, 48, 96, 128, 208],
         },
         's': {
-            'stage_channels': [24, 48, 64, 128, 160, 256],
-            'out_channels': [24, 48, 64, 128, 160, 256],
+            # stem=24, stages=[24, 48, 64, 128, 160, 256]
+            'out_channels': [24, 24, 48, 64, 128, 160, 256],
         },
         'm': {
-            'stage_channels': [24, 48, 80, 160, 176, 304, 512],
-            'out_channels': [24, 48, 80, 160, 176, 304, 512],
+            # stem=24, stages=[24, 48, 80, 160, 176, 304, 512]
+            'out_channels': [24, 24, 48, 80, 160, 176, 304, 512],
         },
         'l': {
-            'stage_channels': [32, 64, 96, 192, 224, 384, 640],
-            'out_channels': [32, 64, 96, 192, 224, 384, 640],
+            # stem=32, stages=[32, 64, 96, 192, 224, 384, 640]
+            'out_channels': [32, 32, 64, 96, 192, 224, 384, 640],
         },
         'xl': {
-            'stage_channels': [32, 64, 96, 192, 256, 512, 640],
-            'out_channels': [32, 64, 96, 192, 256, 512, 640],
+            # stem=32, stages=[32, 64, 96, 192, 256, 512, 640]
+            'out_channels': [32, 32, 64, 96, 192, 256, 512, 640],
         },
     }
 
