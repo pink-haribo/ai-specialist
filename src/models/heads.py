@@ -158,23 +158,22 @@ class LocalizationHead(nn.Module):
         # Final prediction layer
         self.predictor = nn.Conv2d(hidden_channels // 2, num_classes, 1)
 
-        # Activation
-        self.sigmoid = nn.Sigmoid()
-
     def forward(
         self,
         x: torch.Tensor,
         target_size: Optional[Tuple[int, int]] = None
     ) -> torch.Tensor:
         """
-        Generate defect localization map.
+        Generate defect localization logits.
 
         Args:
             x: Input features (B, C, H, W)
             target_size: Optional target output size
 
         Returns:
-            Defect probability map (B, 1, H', W')
+            Defect localization logits (B, 1, H', W')
+            Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss.
+                  Apply sigmoid externally when probability values are needed.
         """
         out = self.decoder(x)
         out = self.predictor(out)
@@ -190,7 +189,8 @@ class LocalizationHead(nn.Module):
                 mode='bilinear', align_corners=False
             )
 
-        return self.sigmoid(out)
+        # Return logits for loss computation (BCE with logits)
+        return out
 
 
 class FeaturePyramidNetwork(nn.Module):

@@ -89,16 +89,19 @@ class DiceLoss(nn.Module):
     Args:
         smooth: Smoothing factor to avoid division by zero
         reduction: Reduction method
+        from_logits: If True, applies sigmoid to inputs before computing loss
     """
 
     def __init__(
         self,
         smooth: float = 1e-6,
         reduction: str = 'mean',
+        from_logits: bool = True,
     ):
         super().__init__()
         self.smooth = smooth
         self.reduction = reduction
+        self.from_logits = from_logits
 
     def forward(
         self,
@@ -109,12 +112,16 @@ class DiceLoss(nn.Module):
         Compute Dice loss.
 
         Args:
-            inputs: Predicted masks (B, 1, H, W)
+            inputs: Predicted logits or probabilities (B, 1, H, W)
             targets: Ground truth masks (B, 1, H, W)
 
         Returns:
             Dice loss value
         """
+        # Apply sigmoid if inputs are logits
+        if self.from_logits:
+            inputs = torch.sigmoid(inputs)
+
         # Flatten
         inputs_flat = inputs.flatten(1)
         targets_flat = targets.flatten(1)
@@ -146,16 +153,19 @@ class IoULoss(nn.Module):
     Args:
         smooth: Smoothing factor
         threshold: Threshold for binarization (optional)
+        from_logits: If True, applies sigmoid to inputs before computing loss
     """
 
     def __init__(
         self,
         smooth: float = 1e-6,
         threshold: Optional[float] = None,
+        from_logits: bool = True,
     ):
         super().__init__()
         self.smooth = smooth
         self.threshold = threshold
+        self.from_logits = from_logits
 
     def forward(
         self,
@@ -166,12 +176,16 @@ class IoULoss(nn.Module):
         Compute IoU loss.
 
         Args:
-            inputs: Predicted masks (B, 1, H, W)
+            inputs: Predicted logits or probabilities (B, 1, H, W)
             targets: Ground truth masks (B, 1, H, W)
 
         Returns:
             IoU loss value
         """
+        # Apply sigmoid if inputs are logits
+        if self.from_logits:
+            inputs = torch.sigmoid(inputs)
+
         if self.threshold is not None:
             inputs = (inputs > self.threshold).float()
 
@@ -204,6 +218,9 @@ class CAMGuidanceLoss(nn.Module):
     For defective samples: CAM should highlight defect regions (match GT mask)
     For normal samples: No supervision (CAM naturally shows less activation)
 
+    Note: CAM from classifier is already sigmoid-applied (normalized to [0,1]),
+    so we use regular BCE here, not BCE with logits.
+
     Args:
         alpha: Weight for BCE loss
         use_dice: Whether to include Dice loss
@@ -220,8 +237,9 @@ class CAMGuidanceLoss(nn.Module):
         self.alpha = alpha
         self.use_dice = use_dice
         self.use_iou = use_iou
-        self.dice_loss = DiceLoss()
-        self.iou_loss = IoULoss()
+        # CAM is already sigmoid-applied, so from_logits=False
+        self.dice_loss = DiceLoss(from_logits=False)
+        self.iou_loss = IoULoss(from_logits=False)
 
     def forward(
         self,
@@ -233,7 +251,7 @@ class CAMGuidanceLoss(nn.Module):
         Compute CAM guidance loss.
 
         Args:
-            cam: Model's CAM (B, 1, H, W), values in [0, 1]
+            cam: Model's CAM (B, 1, H, W), values in [0, 1] (already normalized)
             defect_mask: Ground truth defect mask (B, 1, H, W)
             has_defect: Boolean mask indicating defective samples (B,)
 
@@ -260,6 +278,7 @@ class CAMGuidanceLoss(nn.Module):
             defect_gt = defect_mask[has_defect]
 
             # BCE loss for pixel-wise alignment
+            # Note: CAM is already normalized [0,1], so use regular BCE
             bce_loss = F.binary_cross_entropy(
                 defect_cam,
                 defect_gt,
@@ -309,12 +328,12 @@ class AttentionGuidanceLoss(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.use_iou = use_iou
-        self.dice_loss = DiceLoss()
-        self.iou_loss = IoULoss()
+        self.dice_loss = DiceLoss(from_logits=True)
+        self.iou_loss = IoULoss(from_logits=True)
 
     def forward(
         self,
-        attention_map: torch.Tensor,
+        attention_logits: torch.Tensor,
         defect_mask: torch.Tensor,
         has_defect: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
@@ -322,7 +341,7 @@ class AttentionGuidanceLoss(nn.Module):
         Compute attention guidance loss.
 
         Args:
-            attention_map: Model's attention map (B, 1, H, W)
+            attention_logits: Model's attention logits (B, 1, H, W) - pre-sigmoid
             defect_mask: Ground truth defect mask (B, 1, H, W)
             has_defect: Boolean mask indicating defective samples (B,)
 
@@ -330,39 +349,39 @@ class AttentionGuidanceLoss(nn.Module):
             Dictionary of loss components
         """
         losses = {}
-        device = attention_map.device
+        device = attention_logits.device
 
         # Resize attention to match mask size if needed
-        if attention_map.shape[2:] != defect_mask.shape[2:]:
+        if attention_logits.shape[2:] != defect_mask.shape[2:]:
             attention_resized = F.interpolate(
-                attention_map,
+                attention_logits,
                 size=defect_mask.shape[2:],
                 mode='bilinear',
                 align_corners=False
             )
         else:
-            attention_resized = attention_map
+            attention_resized = attention_logits
 
         # === Loss for defective samples ===
         if has_defect.sum() > 0:
-            defect_attention = attention_resized[has_defect]
+            defect_attention_logits = attention_resized[has_defect]
             defect_gt = defect_mask[has_defect]
 
-            # BCE loss for alignment
-            bce_loss = F.binary_cross_entropy(
-                defect_attention,
+            # BCE with logits for numerical stability (autocast-safe)
+            bce_loss = F.binary_cross_entropy_with_logits(
+                defect_attention_logits,
                 defect_gt,
                 reduction='mean'
             )
             losses['attention_bce'] = self.alpha * bce_loss
 
-            # Dice loss for better overlap
-            dice_loss = self.dice_loss(defect_attention, defect_gt)
+            # Dice loss for better overlap (handles logits internally)
+            dice_loss = self.dice_loss(defect_attention_logits, defect_gt)
             losses['attention_dice'] = self.alpha * dice_loss
 
-            # IoU loss (optional)
+            # IoU loss (optional, handles logits internally)
             if self.use_iou:
-                iou_loss = self.iou_loss(defect_attention, defect_gt)
+                iou_loss = self.iou_loss(defect_attention_logits, defect_gt)
                 losses['attention_iou'] = self.alpha * iou_loss
         else:
             losses['attention_bce'] = torch.tensor(0.0, device=device)
@@ -373,7 +392,9 @@ class AttentionGuidanceLoss(nn.Module):
         # === Loss for normal samples (entropy maximization) ===
         normal_mask = ~has_defect
         if normal_mask.sum() > 0:
-            normal_attention = attention_resized[normal_mask]
+            normal_attention_logits = attention_resized[normal_mask]
+            # Apply sigmoid for entropy computation (need probabilities)
+            normal_attention = torch.sigmoid(normal_attention_logits)
 
             # Flatten spatial dimensions
             attn_flat = normal_attention.flatten(start_dim=2)  # (B, 1, H*W)
@@ -497,6 +518,7 @@ class GAINMTLLoss(nn.Module):
 
         # ============ 3. CAM Guidance Loss (Strategy 2) ============
         # Supervise weight-based CAM directly from classifier (no extra module)
+        # Note: CAM is already normalized [0,1], so uses regular BCE (not with logits)
         if self.lambda_cam_guide > 0 and 'cam' in outputs:
             cam_losses = self.cam_guidance_loss(
                 outputs['cam'],
@@ -511,13 +533,13 @@ class GAINMTLLoss(nn.Module):
 
         # ============ 4. Localization Loss ============
         if self.lambda_loc > 0 and has_defect.sum() > 0:
-            loc_map = outputs['localization_map']
+            loc_logits = outputs['localization_map']  # Returns logits (pre-sigmoid)
 
             # Resize defect mask if needed
-            if loc_map.shape[2:] != defect_mask.shape[2:]:
+            if loc_logits.shape[2:] != defect_mask.shape[2:]:
                 defect_mask_resized = F.interpolate(
                     defect_mask,
-                    size=loc_map.shape[2:],
+                    size=loc_logits.shape[2:],
                     mode='bilinear',
                     align_corners=False
                 )
@@ -525,14 +547,14 @@ class GAINMTLLoss(nn.Module):
                 defect_mask_resized = defect_mask
 
             # Only compute for defective samples
-            loc_pred = loc_map[has_defect]
+            loc_pred_logits = loc_logits[has_defect]
             loc_gt = defect_mask_resized[has_defect]
 
-            # Dice loss
-            dice_loss = self.dice_loss(loc_pred, loc_gt)
+            # Dice loss (handles logits internally with from_logits=True)
+            dice_loss = self.dice_loss(loc_pred_logits, loc_gt)
 
-            # BCE loss
-            bce_loss = F.binary_cross_entropy(loc_pred, loc_gt)
+            # BCE with logits for numerical stability (autocast-safe)
+            bce_loss = F.binary_cross_entropy_with_logits(loc_pred_logits, loc_gt)
 
             losses['loc'] = self.lambda_loc * (dice_loss + bce_loss)
         else:
