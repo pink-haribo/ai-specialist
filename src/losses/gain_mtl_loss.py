@@ -409,9 +409,10 @@ class GAINMTLLoss(nn.Module):
 
     Strategy Guide:
     - Strategy 1: cls only
-    - Strategy 2: cls + am + cam_guide (weight-based CAM supervision)
-    - Strategy 3: cls + am + loc + guide (attention module supervision)
-    - Strategy 4: Full (all losses)
+    - Strategy 2: cls + cam_guide (weight-based CAM supervision)
+    - Strategy 3: cls + am + guide (attention mining)
+    - Strategy 4: cls + am + loc + guide (attention + localization)
+    - Strategy 5: Full (all losses including counterfactual)
 
     Args:
         lambda_cls: Weight for classification loss

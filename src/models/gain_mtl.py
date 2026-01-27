@@ -69,12 +69,19 @@ class GAINMTLModel(nn.Module):
 
     Training vs Inference:
     ```
+    Strategy Guide:
+    - Strategy 1: cls only
+    - Strategy 2: cls + cam_guide (weight-based CAM supervision)
+    - Strategy 3: cls + am + guide (attention mining)
+    - Strategy 4: cls + am + loc + guide (attention + localization)
+    - Strategy 5: Full (all losses including counterfactual)
+
     Training:
-    ├── cls_logits          → cls_loss (baseline, for comparison)
-    ├── attended_cls_logits → am_loss (main classification output)
-    ├── cam                 → cam_guide_loss (Strategy 2: weight-based CAM supervised by GT)
-    ├── attention_map       → guide_loss (Strategy 3+: attention module supervised by GT)
-    └── localization_map    → loc_loss (auxiliary task, improves backbone)
+    ├── cls_logits          → cls_loss (baseline, all strategies)
+    ├── attended_cls_logits → am_loss (Strategy 3+)
+    ├── cam                 → cam_guide_loss (Strategy 2 only)
+    ├── attention_map       → guide_loss (Strategy 3+)
+    └── localization_map    → loc_loss (Strategy 4+)
 
     Inference:
     ├── attended_cls_logits → Final classification output
