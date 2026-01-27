@@ -120,19 +120,19 @@ class GAINMTLModel(nn.Module):
         self.use_counterfactual = use_counterfactual
 
         # ============ Backbone (mmpretrain EfficientNetV2) ============
-        # Ensure out_indices includes the last stage for deep classification features.
-        # The user-specified out_indices provide multi-scale features for FPN,
-        # while the last backbone stage provides the deepest features for classification.
+        # Use the last 4 stages of the backbone for both FPN and classification.
+        # This ensures FPN gets deep multi-scale features and classification
+        # uses the deepest stage, matching standard detection/segmentation practice.
+        #
+        # EfficientNetV2 stage counts (stem + block stages):
+        #   B0/B1/S: 7 (indices 0-6) → last 4 = (3,4,5,6)
+        #   M/L/XL:  8 (indices 0-7) → last 4 = (4,5,6,7)
         arch_settings = EfficientNetV2Backbone.ARCH_SETTINGS.get(backbone_arch.lower())
         if arch_settings is not None:
-            last_stage_idx = len(arch_settings['out_channels']) - 1
-            if last_stage_idx not in out_indices:
-                self._fpn_num_features = len(out_indices)
-                out_indices = tuple(sorted(set(out_indices) | {last_stage_idx}))
-            else:
-                self._fpn_num_features = len(out_indices)
-        else:
-            self._fpn_num_features = len(out_indices)
+            num_stages = len(arch_settings['out_channels'])
+            last_stage_idx = num_stages - 1
+            num_fpn_levels = min(4, num_stages - 1)  # Exclude stem (index 0)
+            out_indices = tuple(range(last_stage_idx - num_fpn_levels + 1, last_stage_idx + 1))
 
         self.backbone = get_backbone(
             arch=backbone_arch,
@@ -141,14 +141,13 @@ class GAINMTLModel(nn.Module):
             out_indices=out_indices,
         )
         backbone_channels = self.backbone.get_feature_dims()
-
-        # Separate FPN channels (multi-scale) from classification channels (deepest)
-        fpn_in_channels = backbone_channels[:self._fpn_num_features]
         final_channels = backbone_channels[-1]
 
         # ============ Feature Pyramid Network ============
+        # FPN uses all returned features (multi-scale);
+        # classification uses final_features (the deepest stage, also in FPN).
         self.fpn = FeaturePyramidNetwork(
-            in_channels_list=fpn_in_channels,
+            in_channels_list=backbone_channels,
             out_channels=fpn_channels,
         )
 
@@ -276,16 +275,13 @@ class GAINMTLModel(nn.Module):
         input_size = x.shape[2:]  # (H, W)
 
         # ============ Feature Extraction ============
-        # Multi-scale features from backbone
-        # Last element is the deepest features (for classification/attention),
-        # earlier elements are multi-scale features (for FPN/localization).
-        all_features = self.backbone(x)
-        final_features = all_features[-1]  # Deepest features for classification
-        fpn_input_features = list(all_features[:self._fpn_num_features])  # Multi-scale for FPN
+        # Multi-scale features from backbone (last 4 stages)
+        multi_scale_features = self.backbone(x)
+        final_features = multi_scale_features[-1]  # Deepest features for classification
 
         # ============ FPN Processing ============
-        fpn_features = self.fpn(fpn_input_features)
-        fpn_fused = self.fpn.get_fused_features(fpn_input_features)
+        fpn_features = self.fpn(multi_scale_features)
+        fpn_fused = self.fpn.get_fused_features(multi_scale_features)
 
         # ============ GAIN Attention ============
         # Generate attention logits through guided attention module
