@@ -99,16 +99,18 @@ def main():
     print('=' * 60)
 
     model = GAINMTLModel(
-        backbone_name=config['model']['backbone'],
+        backbone_arch=config['model']['backbone_arch'],
         num_classes=config['model']['num_classes'],
         pretrained=False,  # Don't need pretrained when loading checkpoint
         fpn_channels=config['model']['fpn_channels'],
         attention_channels=config['model']['attention_channels'],
         use_counterfactual=config['model']['use_counterfactual'],
+        freeze_backbone_stages=config['model']['freeze_backbone_stages'],
+        out_indices=tuple(config['model'].get('out_indices', [3, 4, 5, 6])),
     )
 
     # Load checkpoint
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f'Loaded checkpoint from epoch {checkpoint.get("epoch", "unknown")}')
