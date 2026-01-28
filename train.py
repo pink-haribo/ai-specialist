@@ -402,8 +402,7 @@ def train_single_strategy(
         trainer.load_checkpoint(str(best_checkpoint))
         print('Loaded best model for evaluation')
 
-    cam_source = 'cam_prob' if strategy['weights']['lambda_cam_guide'] > 0 else 'attention_map_prob'
-    test_metrics = evaluate_model(model, test_loader, device, cam_source=cam_source)
+    test_metrics = evaluate_model(model, test_loader, device, cam_source=model._cam_prob_key)
 
     print('\nTest Results:')
     print('-' * 40)

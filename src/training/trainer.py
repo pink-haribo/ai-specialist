@@ -448,12 +448,9 @@ class GAINMTLTrainer:
             all_labels.extend(labels.cpu().numpy())
 
             # CAM-IoU for defective samples
-            # Use cam_prob for Strategy 2 (cam_guide), attention_map_prob for Strategy 3+
+            # Use the model's strategy-configured CAM probability key
             if has_defect.sum() > 0:
-                if self.criterion.lambda_cam_guide > 0:
-                    cam_for_eval = outputs['cam_prob'][has_defect]
-                else:
-                    cam_for_eval = outputs['attention_map_prob'][has_defect]
+                cam_for_eval = outputs[self.model._cam_prob_key][has_defect]
                 cam_iou = self._compute_cam_iou(
                     cam_for_eval,
                     defect_masks[has_defect]
