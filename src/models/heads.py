@@ -82,22 +82,22 @@ class ClassificationHead(nn.Module):
         self,
         features: torch.Tensor,
         class_idx: Optional[int] = None,
-        normalize: bool = True,
     ) -> torch.Tensor:
         """
-        Generate Class Activation Map (CAM) from features.
+        Generate Class Activation Map (CAM) logits from features.
 
         CAM_k = sum_c(w_kc * F_c)
 
         This is fully differentiable and can be used for training.
+        Returns raw logits (pre-sigmoid) for numerical stability with BCE loss.
+        Apply sigmoid externally when probabilities are needed.
 
         Args:
             features: Feature maps from backbone (B, C, H, W)
             class_idx: Class index for CAM. If None, uses class 1 (defect class)
-            normalize: Whether to normalize CAM to [0, 1]
 
         Returns:
-            CAM tensor (B, 1, H, W)
+            CAM logits tensor (B, 1, H, W) - pre-sigmoid
         """
         if class_idx is None:
             class_idx = 1  # Default to defect class for binary classification
@@ -110,10 +110,6 @@ class ClassificationHead(nn.Module):
         # Using element-wise multiplication instead of einsum for CUDA stability
         weights_expanded = weights.view(1, -1, 1, 1)  # (1, C, 1, 1)
         cam = (features * weights_expanded).sum(dim=1, keepdim=True)  # (B, 1, H, W)
-
-        if normalize:
-            # Apply sigmoid for [0, 1] range (differentiable)
-            cam = torch.sigmoid(cam)
 
         return cam
 

@@ -359,6 +359,7 @@ def evaluate_model(
     device: torch.device,
     threshold: float = 0.5,
     return_per_image: bool = False,
+    cam_source: str = 'attention_map_prob',
 ) -> Union[Dict[str, float], Tuple[Dict[str, float], List[Dict[str, Any]]]]:
     """
     Comprehensive model evaluation.
@@ -369,6 +370,10 @@ def evaluate_model(
         device: Device to use
         threshold: Threshold for predictions
         return_per_image: If True, also return per-image results
+        cam_source: Key for CAM probabilities in model outputs.
+            'cam_prob' for Strategy 2 (weight-based CAM),
+            'attention_map_prob' for Strategy 3+ (attention module).
+            Both are already sigmoid-applied [0,1].
 
     Returns:
         Dictionary of all metrics, or tuple of (metrics, per_image_results) if
@@ -404,10 +409,10 @@ def evaluate_model(
             all_probabilities.extend(probs.cpu().numpy())
 
             # Attention and localization (for defective samples)
-            # Apply sigmoid to convert logits to [0, 1] probabilities
-            all_attention_maps.append(torch.sigmoid(outputs['attention_map']).cpu())
+            # Use pre-computed probabilities (already sigmoid-applied)
+            all_attention_maps.append(outputs[cam_source].cpu())
             all_defect_masks.append(defect_masks.cpu())
-            all_loc_maps.append(torch.sigmoid(outputs['localization_map']).cpu())
+            all_loc_maps.append(outputs['localization_map_prob'].cpu())
             all_has_defect.extend(has_defect.cpu().numpy())
 
             if return_per_image:

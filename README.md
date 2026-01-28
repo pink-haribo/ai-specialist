@@ -325,6 +325,43 @@ Input Image (B, 3, H, W)
 └─────────────────────────┘
 ```
 
+## Strategy별 Forward 출력 사용
+
+모델의 `forward()`는 항상 모든 출력을 반환하지만, **어떤 출력을 사용할지는 학습 Strategy에 따라 달라집니다.**
+
+### 출력 키 구조
+
+```
+forward() 출력:
+├── 분류 logits
+│   ├── cls_logits              ← backbone → classification_head (attention 없이)
+│   └── attended_cls_logits     ← backbone → attention_module → attended_classification_head
+│
+├── Spatial maps (logits, loss용)
+│   ├── cam                     ← classification_head의 weight × features
+│   ├── attention_map           ← attention_module + mining_head
+│   └── localization_map        ← localization_head (FPN 기반)
+│
+└── Spatial maps (probabilities, 평가/시각화용)
+    ├── cam_prob                ← sigmoid(cam)
+    ├── attention_map_prob      ← sigmoid(attention_map)
+    └── localization_map_prob   ← sigmoid(localization_map)
+```
+
+### Strategy별 사용 출력
+
+| Strategy | 설명 | 분류 출력 | CAM 평가 | 활성 Loss |
+|----------|------|-----------|----------|-----------|
+| **1** | Classification only | `cls_logits` | `cam_prob` | cls |
+| **2** | + CAM Guidance | `cls_logits` | `cam_prob` | cls + cam_bce + cam_dice |
+| **3** | + Attention Mining | `attended_cls_logits` | `attention_map_prob` | cls + am + guide |
+| **4** | + Localization | `attended_cls_logits` | `attention_map_prob` | 3 + loc + consist |
+| **5** | Full | `attended_cls_logits` | `attention_map_prob` | 4 + cf |
+
+- **Strategy 1-2**: attention module을 학습하지 않으므로 `cls_logits` + `cam_prob` 사용
+- **Strategy 3+**: attention module이 학습되므로 `attended_cls_logits` + `attention_map_prob` 사용
+- `model.set_strategy(n)` 호출로 `predict()`, `get_explanation()`, 평가 시 자동 선택
+
 ## Loss Functions
 
 ```python

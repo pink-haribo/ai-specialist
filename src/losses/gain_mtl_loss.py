@@ -218,8 +218,8 @@ class CAMGuidanceLoss(nn.Module):
     For defective samples: CAM should highlight defect regions (match GT mask)
     For normal samples: No supervision (CAM naturally shows less activation)
 
-    Note: CAM from classifier is already sigmoid-applied (normalized to [0,1]),
-    so we use regular BCE here, not BCE with logits.
+    Note: CAM is now logits (pre-sigmoid), consistent with attention_map.
+    Uses BCE with logits for numerical stability.
 
     Args:
         alpha: Weight for BCE loss
@@ -237,13 +237,13 @@ class CAMGuidanceLoss(nn.Module):
         self.alpha = alpha
         self.use_dice = use_dice
         self.use_iou = use_iou
-        # CAM is already sigmoid-applied, so from_logits=False
-        self.dice_loss = DiceLoss(from_logits=False)
-        self.iou_loss = IoULoss(from_logits=False)
+        # CAM is now logits (pre-sigmoid), consistent with attention_map
+        self.dice_loss = DiceLoss(from_logits=True)
+        self.iou_loss = IoULoss(from_logits=True)
 
     def forward(
         self,
-        cam: torch.Tensor,
+        cam_logits: torch.Tensor,
         defect_mask: torch.Tensor,
         has_defect: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
@@ -251,7 +251,7 @@ class CAMGuidanceLoss(nn.Module):
         Compute CAM guidance loss.
 
         Args:
-            cam: Model's CAM (B, 1, H, W), values in [0, 1] (already normalized)
+            cam_logits: Model's CAM logits (B, 1, H, W) - pre-sigmoid
             defect_mask: Ground truth defect mask (B, 1, H, W)
             has_defect: Boolean mask indicating defective samples (B,)
 
@@ -259,41 +259,40 @@ class CAMGuidanceLoss(nn.Module):
             Dictionary of loss components
         """
         losses = {}
-        device = cam.device
+        device = cam_logits.device
 
         # Resize CAM to match mask size if needed
-        if cam.shape[2:] != defect_mask.shape[2:]:
+        if cam_logits.shape[2:] != defect_mask.shape[2:]:
             cam_resized = F.interpolate(
-                cam,
+                cam_logits,
                 size=defect_mask.shape[2:],
                 mode='bilinear',
                 align_corners=False
             )
         else:
-            cam_resized = cam
+            cam_resized = cam_logits
 
         # === Loss for defective samples only ===
         if has_defect.sum() > 0:
-            defect_cam = cam_resized[has_defect]
+            defect_cam_logits = cam_resized[has_defect]
             defect_gt = defect_mask[has_defect]
 
-            # BCE loss for pixel-wise alignment
-            # Note: CAM is already normalized [0,1], so use regular BCE
-            bce_loss = F.binary_cross_entropy(
-                defect_cam,
+            # BCE with logits for numerical stability (consistent with attention_map)
+            bce_loss = F.binary_cross_entropy_with_logits(
+                defect_cam_logits,
                 defect_gt,
                 reduction='mean'
             )
             losses['cam_bce'] = self.alpha * bce_loss
 
-            # Dice loss for region overlap
+            # Dice loss for region overlap (handles logits internally)
             if self.use_dice:
-                dice_loss = self.dice_loss(defect_cam, defect_gt)
+                dice_loss = self.dice_loss(defect_cam_logits, defect_gt)
                 losses['cam_dice'] = self.alpha * dice_loss
 
-            # IoU loss (optional)
+            # IoU loss (optional, handles logits internally)
             if self.use_iou:
-                iou_loss = self.iou_loss(defect_cam, defect_gt)
+                iou_loss = self.iou_loss(defect_cam_logits, defect_gt)
                 losses['cam_iou'] = self.alpha * iou_loss
         else:
             losses['cam_bce'] = torch.tensor(0.0, device=device)
