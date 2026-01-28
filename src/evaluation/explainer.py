@@ -35,6 +35,7 @@ class DefectExplainer:
         model: torch.nn.Module,
         device: Optional[torch.device] = None,
         class_names: Optional[List[str]] = None,
+        strategy: int = 3,
     ):
         """
         Initialize explainer.
@@ -43,10 +44,13 @@ class DefectExplainer:
             model: Trained GAIN-MTL model
             device: Device to use (auto-detect if None)
             class_names: List of class names (default: ['Normal', 'Defective'])
+            strategy: Training strategy (1-2: cam_prob, 3+: attention_map_prob)
         """
         self.model = model
         self.device = device or next(model.parameters()).device
         self.class_names = class_names or ['Normal', 'Defective']
+        self.strategy = strategy
+        self.cam_source = 'cam_prob' if strategy <= 2 else 'attention_map_prob'
         self.model.eval()
 
     @torch.no_grad()
@@ -93,17 +97,17 @@ class DefectExplainer:
         attended_probs = F.softmax(attended_logits, dim=0)
         attended_pred = attended_probs.argmax().item()
 
-        # Attention maps
-        attention_map = outputs['attention_map'][0, 0]
-        attention_up = F.interpolate(
-            outputs['attention_map'],
+        # CAM for defective class (strategy-dependent source)
+        cam_map = outputs[self.cam_source][0, 0]
+        cam_up = F.interpolate(
+            outputs[self.cam_source],
             size=image.shape[2:],
             mode='bilinear',
             align_corners=False
         )[0, 0]
 
         # Localization map
-        loc_map = outputs['localization_map'][0, 0]
+        loc_map = outputs['localization_map_prob'][0, 0]
 
         # Build explanation
         explanation = {
@@ -114,8 +118,8 @@ class DefectExplainer:
             'attended_prediction': attended_pred,
             'attended_confidence': attended_probs[attended_pred].item(),
             'consistency': pred_class == attended_pred,
-            'attention_map': attention_up.cpu().numpy(),
-            'attention_map_raw': attention_map.cpu().numpy(),
+            'cam': cam_up.cpu().numpy(),
+            'cam_raw': cam_map.cpu().numpy(),
             'localization_map': loc_map.cpu().numpy(),
             'features': outputs['features'][0].cpu().numpy(),
         }
@@ -129,7 +133,7 @@ class DefectExplainer:
 
             explanation['ground_truth_mask'] = defect_mask
             explanation['cam_iou'] = self._compute_iou(
-                attention_up.cpu().numpy(),
+                cam_up.cpu().numpy(),
                 defect_mask
             )
             explanation['loc_iou'] = self._compute_iou(
@@ -214,7 +218,11 @@ class DefectExplainer:
             image = np.clip(image, 0, 255).astype(np.uint8)
 
         # Create figure
+        # Top row: Image, GT Mask, CAM (defective class)
+        # Bottom row: Localization, CAM vs GT, Counterfactual
         fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+        # === Top Row ===
 
         # 1. Original image with prediction
         axes[0, 0].imshow(image)
@@ -224,70 +232,71 @@ class DefectExplainer:
         axes[0, 0].set_title(f'Prediction: {pred_name}\nConfidence: {conf:.2%}', color=color)
         axes[0, 0].axis('off')
 
-        # 2. Attention map overlay
-        axes[0, 1].imshow(image)
-        attention_overlay = axes[0, 1].imshow(
-            explanation['attention_map'],
-            alpha=0.6,
-            cmap='jet',
-            vmin=0,
-            vmax=1,
-        )
-        axes[0, 1].set_title('Attention Map\n(Where model looks)')
-        axes[0, 1].axis('off')
-        plt.colorbar(attention_overlay, ax=axes[0, 1], fraction=0.046)
-
-        # 3. Localization map
-        axes[0, 2].imshow(image)
-        loc_overlay = axes[0, 2].imshow(
-            explanation['localization_map'],
-            alpha=0.6,
-            cmap='hot',
-            vmin=0,
-            vmax=1,
-        )
-        axes[0, 2].set_title('Localization Map\n(Detected defect regions)')
-        axes[0, 2].axis('off')
-        plt.colorbar(loc_overlay, ax=axes[0, 2], fraction=0.046)
-
-        # 4. Ground truth (if available)
+        # 2. Ground truth mask
         if 'ground_truth_mask' in explanation:
-            axes[1, 0].imshow(image)
-            gt_overlay = axes[1, 0].imshow(
+            axes[0, 1].imshow(image)
+            gt_overlay = axes[0, 1].imshow(
                 explanation['ground_truth_mask'],
                 alpha=0.6,
                 cmap='Reds',
                 vmin=0,
                 vmax=1,
             )
-            iou_text = f"CAM-IoU: {explanation.get('cam_iou', 0):.3f}"
-            axes[1, 0].set_title(f'Ground Truth\n{iou_text}')
-            axes[1, 0].axis('off')
-            plt.colorbar(gt_overlay, ax=axes[1, 0], fraction=0.046)
+            axes[0, 1].set_title('Ground Truth Mask')
+            axes[0, 1].axis('off')
+            plt.colorbar(gt_overlay, ax=axes[0, 1], fraction=0.046)
         else:
-            axes[1, 0].text(
+            axes[0, 1].text(
                 0.5, 0.5,
                 'No Ground Truth\nProvided',
                 ha='center', va='center',
-                fontsize=12, transform=axes[1, 0].transAxes
+                fontsize=12, transform=axes[0, 1].transAxes
             )
-            axes[1, 0].axis('off')
+            axes[0, 1].axis('off')
 
-        # 5. Attention vs GT comparison
+        # 3. CAM (defective class)
+        axes[0, 2].imshow(image)
+        cam_overlay = axes[0, 2].imshow(
+            explanation['cam'],
+            alpha=0.6,
+            cmap='jet',
+            vmin=0,
+            vmax=1,
+        )
+        iou_text = f"\nCAM-IoU: {explanation.get('cam_iou', 0):.3f}" if 'cam_iou' in explanation else ''
+        axes[0, 2].set_title(f'CAM (Defective){iou_text}')
+        axes[0, 2].axis('off')
+        plt.colorbar(cam_overlay, ax=axes[0, 2], fraction=0.046)
+
+        # === Bottom Row ===
+
+        # 4. Localization map
+        axes[1, 0].imshow(image)
+        loc_overlay = axes[1, 0].imshow(
+            explanation['localization_map'],
+            alpha=0.6,
+            cmap='hot',
+            vmin=0,
+            vmax=1,
+        )
+        axes[1, 0].set_title('Localization Map\n(Detected defect regions)')
+        axes[1, 0].axis('off')
+        plt.colorbar(loc_overlay, ax=axes[1, 0], fraction=0.046)
+
+        # 5. CAM vs GT comparison
         if 'ground_truth_mask' in explanation:
-            # Create comparison image
-            attn = explanation['attention_map']
+            cam = explanation['cam']
             gt = explanation['ground_truth_mask']
-            if attn.shape != gt.shape:
-                attn = cv2.resize(attn, (gt.shape[1], gt.shape[0]))
+            if cam.shape != gt.shape:
+                cam = cv2.resize(cam, (gt.shape[1], gt.shape[0]))
 
-            axes[1, 1].imshow(attn, cmap='jet')
+            axes[1, 1].imshow(cam, cmap='jet')
             axes[1, 1].contour(gt, colors='red', linewidths=2, levels=[0.5])
-            axes[1, 1].set_title('Attention vs GT\n(Red: GT boundary)')
+            axes[1, 1].set_title('CAM vs GT\n(Red: GT boundary)')
             axes[1, 1].axis('off')
         else:
-            axes[1, 1].imshow(explanation['attention_map'], cmap='jet')
-            axes[1, 1].set_title('Attention Map')
+            axes[1, 1].imshow(explanation['cam'], cmap='jet')
+            axes[1, 1].set_title('CAM')
             axes[1, 1].axis('off')
 
         # 6. Counterfactual explanation

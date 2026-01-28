@@ -60,8 +60,8 @@ def parse_args():
                         help='Generate visualizations')
     parser.add_argument('--vis_dir', type=str, default='./visualizations',
                         help='Directory for visualizations')
-    parser.add_argument('--num_vis', type=int, default=20,
-                        help='Number of samples to visualize')
+    parser.add_argument('--num_vis_per_class', type=int, default=10,
+                        help='Number of samples to visualize per class (defective/normal)')
 
     # Analysis options
     parser.add_argument('--per_class', action='store_true',
@@ -209,7 +209,8 @@ def main():
             dataloader=dataloader,
             device=device,
             output_dir=vis_dir,
-            num_samples=args.num_vis,
+            num_per_class=args.num_vis_per_class,
+            strategy=args.strategy,
         )
 
         print(f'Visualizations saved to: {vis_dir}')
@@ -307,34 +308,46 @@ def perform_error_analysis(model, dataloader, device, threshold=0.5):
     print(f'  Correct prediction but wrong attention: {correct_but_wrong_cam}')
 
 
-def generate_visualizations(model, dataloader, device, output_dir, num_samples=20):
-    """Generate visualization for random samples."""
+def generate_visualizations(model, dataloader, device, output_dir, num_per_class=10, strategy=3):
+    """Generate visualization for balanced defective/normal samples."""
     import matplotlib
     matplotlib.use('Agg')
 
-    explainer = DefectExplainer(model, device)
+    explainer = DefectExplainer(model, device, strategy=strategy)
 
-    # Collect samples
-    samples = []
+    # Collect balanced samples: separate defective and normal
+    defective_samples = []
+    normal_samples = []
     for batch in dataloader:
         for i in range(len(batch['image'])):
-            samples.append({
+            sample = {
                 'image': batch['image'][i],
                 'defect_mask': batch['defect_mask'][i],
                 'label': batch['label'][i].item(),
-                'path': batch.get('image_path', [None])[i] if 'image_path' in batch else None
-            })
-            if len(samples) >= num_samples:
+                'path': batch.get('image_path', [None])[i] if 'image_path' in batch else None,
+            }
+            if sample['label'] == 1 and len(defective_samples) < num_per_class:
+                defective_samples.append(sample)
+            elif sample['label'] == 0 and len(normal_samples) < num_per_class:
+                normal_samples.append(sample)
+
+            if len(defective_samples) >= num_per_class and len(normal_samples) >= num_per_class:
                 break
-        if len(samples) >= num_samples:
+        if len(defective_samples) >= num_per_class and len(normal_samples) >= num_per_class:
             break
+
+    print(f'Collected {len(defective_samples)} defective, {len(normal_samples)} normal samples')
+
+    # Defective first, then normal
+    samples = defective_samples + normal_samples
 
     # Generate visualizations
     for i, sample in enumerate(tqdm(samples, desc='Generating visualizations')):
+        label_tag = 'defective' if sample['label'] == 1 else 'normal'
         fig = explainer.visualize(
             image=sample['image'],
             defect_mask=sample['defect_mask'].numpy() if sample['defect_mask'] is not None else None,
-            save_path=str(output_dir / f'sample_{i:03d}.png'),
+            save_path=str(output_dir / f'{label_tag}_{i:03d}.png'),
         )
         import matplotlib.pyplot as plt
         plt.close(fig)
