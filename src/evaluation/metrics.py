@@ -404,9 +404,10 @@ def evaluate_model(
             all_probabilities.extend(probs.cpu().numpy())
 
             # Attention and localization (for defective samples)
-            all_attention_maps.append(outputs['attention_map'].cpu())
+            # Apply sigmoid to convert logits to [0, 1] probabilities
+            all_attention_maps.append(torch.sigmoid(outputs['attention_map']).cpu())
             all_defect_masks.append(defect_masks.cpu())
-            all_loc_maps.append(outputs['localization_map'].cpu())
+            all_loc_maps.append(torch.sigmoid(outputs['localization_map']).cpu())
             all_has_defect.extend(has_defect.cpu().numpy())
 
             if return_per_image:
