@@ -208,7 +208,7 @@ def main():
     # ============ Export Results ============
     if args.export_results:
         with open(args.export_results, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(metrics, f, indent=2, default=lambda x: float(x))
         print(f'\nResults exported to: {args.export_results}')
 
     print('\nEvaluation complete!')
