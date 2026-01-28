@@ -279,12 +279,87 @@ class MetricTracker:
         return self._values.get(metric, [])
 
 
+def _compute_per_image_cam_metrics(
+    attention_map: np.ndarray,
+    defect_mask: np.ndarray,
+    threshold: float = 0.5,
+) -> Dict[str, float]:
+    """
+    Compute CAM quality metrics for a single image.
+
+    Args:
+        attention_map: Attention map (1, H, W) or (H, W)
+        defect_mask: Ground truth mask (1, H, W) or (H, W)
+        threshold: Binarization threshold
+
+    Returns:
+        Dictionary with cam_iou, point_game, energy_inside
+    """
+    attn = attention_map[0] if attention_map.ndim == 3 else attention_map
+    mask = defect_mask[0] if defect_mask.ndim == 3 else defect_mask
+
+    # Resize if needed
+    if attn.shape != mask.shape:
+        import cv2
+        attn = cv2.resize(attn, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+    if mask.sum() == 0:
+        return {'cam_iou': 0.0, 'point_game': 0.0, 'energy_inside': 0.0}
+
+    attn_bin = (attn > threshold).astype(np.float32)
+    mask_bin = (mask > threshold).astype(np.float32)
+
+    intersection = (attn_bin * mask_bin).sum()
+    union = attn_bin.sum() + mask_bin.sum() - intersection
+    cam_iou = float((intersection + 1e-6) / (union + 1e-6))
+
+    max_idx = np.unravel_index(np.argmax(attn), attn.shape)
+    point_game = float(mask[max_idx] > threshold)
+
+    total_energy = attn.sum()
+    inside_energy = (attn * mask_bin).sum()
+    energy_inside = float(inside_energy / (total_energy + 1e-6))
+
+    return {'cam_iou': cam_iou, 'point_game': point_game, 'energy_inside': energy_inside}
+
+
+def _compute_per_image_loc_metrics(
+    prediction: np.ndarray,
+    target: np.ndarray,
+    threshold: float = 0.5,
+) -> Dict[str, float]:
+    """
+    Compute localization metrics for a single image.
+
+    Args:
+        prediction: Predicted mask (1, H, W) or (H, W)
+        target: Ground truth mask (1, H, W) or (H, W)
+        threshold: Binarization threshold
+
+    Returns:
+        Dictionary with loc_iou, loc_dice
+    """
+    pred = prediction.flatten()
+    tgt = target.flatten()
+
+    pred_bin = (pred > threshold).astype(np.float32)
+    tgt_bin = (tgt > threshold).astype(np.float32)
+
+    intersection = (pred_bin * tgt_bin).sum()
+    union = pred_bin.sum() + tgt_bin.sum() - intersection
+    iou = float((intersection + 1e-6) / (union + 1e-6))
+    dice = float((2 * intersection + 1e-6) / (pred_bin.sum() + tgt_bin.sum() + 1e-6))
+
+    return {'loc_iou': iou, 'loc_dice': dice}
+
+
 def evaluate_model(
     model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
     threshold: float = 0.5,
-) -> Dict[str, float]:
+    return_per_image: bool = False,
+) -> Union[Dict[str, float], Tuple[Dict[str, float], List[Dict[str, Any]]]]:
     """
     Comprehensive model evaluation.
 
@@ -293,9 +368,11 @@ def evaluate_model(
         dataloader: Data loader
         device: Device to use
         threshold: Threshold for predictions
+        return_per_image: If True, also return per-image results
 
     Returns:
-        Dictionary of all metrics
+        Dictionary of all metrics, or tuple of (metrics, per_image_results) if
+        return_per_image is True.
     """
     model.eval()
 
@@ -306,6 +383,7 @@ def evaluate_model(
     all_defect_masks = []
     all_loc_maps = []
     all_has_defect = []
+    all_image_paths = []
 
     with torch.no_grad():
         for batch in dataloader:
@@ -313,6 +391,7 @@ def evaluate_model(
             labels = batch['label'].to(device)
             defect_masks = batch['defect_mask'].to(device)
             has_defect = batch['has_defect'].to(device)
+            image_paths = batch.get('image_path', [None] * len(images))
 
             outputs = model(images)
 
@@ -329,6 +408,9 @@ def evaluate_model(
             all_defect_masks.append(defect_masks.cpu())
             all_loc_maps.append(outputs['localization_map'].cpu())
             all_has_defect.extend(has_defect.cpu().numpy())
+
+            if return_per_image:
+                all_image_paths.extend(image_paths)
 
     # Classification metrics
     all_predictions = np.array(all_predictions)
@@ -359,4 +441,37 @@ def evaluate_model(
     # Combine all metrics
     all_metrics = {**cls_metrics, **cam_metrics, **loc_metrics}
 
-    return all_metrics
+    if not return_per_image:
+        return all_metrics
+
+    # Build per-image results
+    per_image_results = []
+    for i in range(len(all_predictions)):
+        pred = int(all_predictions[i])
+        label = int(all_labels[i])
+        probs_i = all_probabilities[i]
+        defect_prob = float(probs_i[1]) if len(probs_i) > 1 else float(probs_i[0])
+
+        result = {
+            'image_path': all_image_paths[i] if all_image_paths else None,
+            'ground_truth': label,
+            'prediction': pred,
+            'confidence': float(probs_i[pred]),
+            'defect_probability': defect_prob,
+            'correct': pred == label,
+        }
+
+        # Add CAM/localization metrics for defective samples (ground truth)
+        if all_has_defect[i]:
+            attn_np = all_attention_maps[i].numpy()
+            mask_np = all_defect_masks[i].numpy()
+            loc_np = all_loc_maps[i].numpy()
+
+            cam_per = _compute_per_image_cam_metrics(attn_np, mask_np, threshold)
+            loc_per = _compute_per_image_loc_metrics(loc_np, mask_np, threshold)
+            result.update(cam_per)
+            result.update(loc_per)
+
+        per_image_results.append(result)
+
+    return all_metrics, per_image_results
