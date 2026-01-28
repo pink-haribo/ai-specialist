@@ -148,7 +148,9 @@ def main():
     print('Running Evaluation')
     print('=' * 60)
 
-    metrics = evaluate_model(model, dataloader, device, args.threshold)
+    metrics, per_image_results = evaluate_model(
+        model, dataloader, device, args.threshold, return_per_image=True
+    )
 
     print('\n' + '=' * 60)
     print('Results')
@@ -207,9 +209,15 @@ def main():
 
     # ============ Export Results ============
     if args.export_results:
+        export_data = {
+            'metrics': metrics,
+            'per_image_results': per_image_results,
+        }
         with open(args.export_results, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
         print(f'\nResults exported to: {args.export_results}')
+        print(f'  - Aggregate metrics: {len(metrics)} metrics')
+        print(f'  - Per-image results: {len(per_image_results)} images')
 
     print('\nEvaluation complete!')
 
