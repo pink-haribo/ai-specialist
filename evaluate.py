@@ -49,6 +49,10 @@ def parse_args():
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use')
 
+    # Strategy (determines which outputs to use for classification and CAM)
+    parser.add_argument('--strategy', type=int, default=3, choices=[1, 2, 3, 4, 5],
+                        help='Training strategy (1-2: cls_logits+cam, 3+: attended_cls_logits+attention_map)')
+
     # Output options
     parser.add_argument('--export_results', type=str, default=None,
                         help='Export results to JSON file')
@@ -120,6 +124,7 @@ def main():
         model.load_state_dict(checkpoint)
 
     model = model.to(device)
+    model.set_strategy(args.strategy)
     model.eval()
 
     # ============ Load Data ============
@@ -148,8 +153,10 @@ def main():
     print('Running Evaluation')
     print('=' * 60)
 
+    cam_source = 'cam_prob' if args.strategy <= 2 else 'attention_map_prob'
     metrics, per_image_results = evaluate_model(
-        model, dataloader, device, args.threshold, return_per_image=True
+        model, dataloader, device, args.threshold, return_per_image=True,
+        cam_source=cam_source,
     )
 
     print('\n' + '=' * 60)

@@ -285,6 +285,7 @@ def train_single_strategy(
 
     # Create fresh model, criterion, optimizer, scheduler
     model = create_model(config, device)
+    model.set_strategy(strategy_id)
     criterion = create_criterion(config, strategy['weights'])
     optimizer = create_optimizer(model, config)
     scheduler = create_scheduler(optimizer, config)
@@ -401,7 +402,8 @@ def train_single_strategy(
         trainer.load_checkpoint(str(best_checkpoint))
         print('Loaded best model for evaluation')
 
-    test_metrics = evaluate_model(model, test_loader, device)
+    cam_source = 'cam_prob' if strategy['weights']['lambda_cam_guide'] > 0 else 'attention_map_prob'
+    test_metrics = evaluate_model(model, test_loader, device, cam_source=cam_source)
 
     print('\nTest Results:')
     print('-' * 40)
