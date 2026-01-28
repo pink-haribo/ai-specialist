@@ -348,6 +348,7 @@ def generate_visualizations(model, dataloader, device, output_dir, num_per_class
             image=sample['image'],
             defect_mask=sample['defect_mask'].numpy() if sample['defect_mask'] is not None else None,
             save_path=str(output_dir / f'{label_tag}_{i:03d}.png'),
+            image_path=sample['path'],
         )
         import matplotlib.pyplot as plt
         plt.close(fig)

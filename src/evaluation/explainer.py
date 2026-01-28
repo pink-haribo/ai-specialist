@@ -182,6 +182,7 @@ class DefectExplainer:
         defect_mask: Optional[np.ndarray] = None,
         save_path: Optional[str] = None,
         figsize: Tuple[int, int] = (15, 10),
+        image_path: Optional[str] = None,
     ) -> plt.Figure:
         """
         Visualize explanation.
@@ -192,6 +193,7 @@ class DefectExplainer:
             defect_mask: Optional ground truth mask
             save_path: Path to save figure
             figsize: Figure size
+            image_path: Optional source image path to display
 
         Returns:
             Matplotlib figure
@@ -221,6 +223,9 @@ class DefectExplainer:
         # Top row: Image, GT Mask, CAM (defective class)
         # Bottom row: Localization, CAM vs GT, Counterfactual
         fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+        if image_path:
+            fig.suptitle(f'Source: {image_path}', fontsize=9, color='gray', y=0.99)
 
         # === Top Row ===
 
