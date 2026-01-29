@@ -221,6 +221,15 @@ class DefectExplainer:
             image = (image * std + mean) * 255
             image = np.clip(image, 0, 255).astype(np.uint8)
 
+        # Resize CAM and localization map to match image dimensions
+        img_h, img_w = image.shape[:2]
+        cam = explanation['cam']
+        loc_map = explanation['localization_map']
+        if cam.shape != (img_h, img_w):
+            cam = cv2.resize(cam, (img_w, img_h))
+        if loc_map.shape != (img_h, img_w):
+            loc_map = cv2.resize(loc_map, (img_w, img_h))
+
         # Create figure
         # Top row: Image, GT Mask, CAM (defective class)
         # Bottom row: Localization, CAM vs GT, Counterfactual
@@ -271,7 +280,7 @@ class DefectExplainer:
         # 3. CAM (defective class)
         axes[0, 2].imshow(image)
         cam_overlay = axes[0, 2].imshow(
-            explanation['cam'],
+            cam,
             alpha=0.6,
             cmap='jet',
             vmin=0,
@@ -287,7 +296,7 @@ class DefectExplainer:
         # 4. Localization map
         axes[1, 0].imshow(image)
         loc_overlay = axes[1, 0].imshow(
-            explanation['localization_map'],
+            loc_map,
             alpha=0.6,
             cmap='hot',
             vmin=0,
@@ -299,17 +308,17 @@ class DefectExplainer:
 
         # 5. CAM vs GT comparison
         if 'ground_truth_mask' in explanation:
-            cam = explanation['cam']
             gt = explanation['ground_truth_mask']
-            if cam.shape != gt.shape:
-                cam = cv2.resize(cam, (gt.shape[1], gt.shape[0]))
+            # Resize GT if needed to match image dimensions
+            if gt.shape != (img_h, img_w):
+                gt = cv2.resize(gt, (img_w, img_h))
 
             axes[1, 1].imshow(cam, cmap='jet')
             axes[1, 1].contour(gt, colors='red', linewidths=2, levels=[0.5])
             axes[1, 1].set_title('CAM vs GT\n(Red: GT boundary)')
             axes[1, 1].axis('off')
         else:
-            axes[1, 1].imshow(explanation['cam'], cmap='jet')
+            axes[1, 1].imshow(cam, cmap='jet')
             axes[1, 1].set_title('CAM')
             axes[1, 1].axis('off')
 
