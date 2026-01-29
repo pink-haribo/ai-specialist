@@ -150,7 +150,7 @@ def main():
         data_root=config['data']['data_root'],
         batch_size=args.batch_size,
         image_size=tuple(config['data']['image_size']),
-        num_workers=4,
+        num_workers=0,  # Use 0 to avoid shared memory issues on Windows
         dataset_type=config['data']['dataset_type'],
         category=config['data'].get('category', 'bottle'),
     )
