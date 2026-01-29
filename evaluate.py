@@ -166,12 +166,19 @@ def main():
     print('\n' + '=' * 60)
     print('Running Evaluation')
     print('=' * 60)
+    sys.stdout.flush()
 
     cam_source = 'cam_prob' if args.strategy <= 2 else 'attention_map_prob'
-    metrics, per_image_results = evaluate_model(
-        model, dataloader, device, args.threshold, return_per_image=True,
-        cam_source=cam_source,
-    )
+    try:
+        metrics, per_image_results = evaluate_model(
+            model, dataloader, device, args.threshold, return_per_image=True,
+            cam_source=cam_source,
+        )
+    except Exception as e:
+        import traceback
+        print(f'\nError during evaluation: {e}')
+        traceback.print_exc()
+        sys.exit(1)
 
     print('\n' + '=' * 60)
     print('Results')
