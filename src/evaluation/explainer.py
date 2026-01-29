@@ -230,6 +230,13 @@ class DefectExplainer:
         if loc_map.shape != (img_h, img_w):
             loc_map = cv2.resize(loc_map, (img_w, img_h))
 
+        # Normalize CAM for better visualization (min-max scaling)
+        cam_min, cam_max = cam.min(), cam.max()
+        if cam_max - cam_min > 1e-6:
+            cam_normalized = (cam - cam_min) / (cam_max - cam_min)
+        else:
+            cam_normalized = cam
+
         # Create figure
         # Top row: Image, GT Mask, CAM (defective class)
         # Bottom row: Localization, CAM vs GT, Counterfactual
@@ -277,10 +284,10 @@ class DefectExplainer:
             )
             axes[0, 1].axis('off')
 
-        # 3. CAM (defective class)
+        # 3. CAM (defective class) - use normalized CAM for visualization
         axes[0, 2].imshow(image)
         cam_overlay = axes[0, 2].imshow(
-            cam,
+            cam_normalized,
             alpha=0.6,
             cmap='jet',
             vmin=0,
@@ -306,19 +313,19 @@ class DefectExplainer:
         axes[1, 0].axis('off')
         plt.colorbar(loc_overlay, ax=axes[1, 0], fraction=0.046)
 
-        # 5. CAM vs GT comparison
+        # 5. CAM vs GT comparison - use normalized CAM for visualization
         if 'ground_truth_mask' in explanation:
             gt = explanation['ground_truth_mask']
             # Resize GT if needed to match image dimensions
             if gt.shape != (img_h, img_w):
                 gt = cv2.resize(gt, (img_w, img_h))
 
-            axes[1, 1].imshow(cam, cmap='jet')
+            axes[1, 1].imshow(cam_normalized, cmap='jet')
             axes[1, 1].contour(gt, colors='red', linewidths=2, levels=[0.5])
             axes[1, 1].set_title('CAM vs GT\n(Red: GT boundary)')
             axes[1, 1].axis('off')
         else:
-            axes[1, 1].imshow(cam, cmap='jet')
+            axes[1, 1].imshow(cam_normalized, cmap='jet')
             axes[1, 1].set_title('CAM')
             axes[1, 1].axis('off')
 
