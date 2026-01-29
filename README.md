@@ -293,37 +293,79 @@ python evaluate.py --checkpoint checkpoints/best_model.pth --export_results resu
 Input Image (B, 3, H, W)
          │
          ▼
-┌─────────────────────────┐
-│  EfficientNetV2         │
-│  (mmpretrain backbone)  │ ──► Multi-scale features (last 4 stages)
-└─────────────────────────┘
-              │
-              ▼
-┌─────────────────────────┐
-│   Feature Pyramid       │
-│      Network (FPN)      │ ──► Unified 256-ch features
-└─────────────────────────┘
-              │
-        ┌─────┴─────┐
-        ▼           ▼
-┌─────────────┐  ┌─────────────────┐
-│    GAIN     │  │  Localization   │
-│  Attention  │  │     Head        │
-│   Module    │  │                 │
-└─────────────┘  └─────────────────┘
-        │                │
-        ▼                ▼
-┌─────────────┐  ┌─────────────────┐
-│ Cls Head    │  │   Defect Mask   │
-│ (양품/불량) │  │  (위치 예측)    │
-└─────────────┘  └─────────────────┘
-        │
-        ▼
-┌─────────────────────────┐
-│   Counterfactual        │
-│   Module (학습 시)      │ ──► "결함 제거 시 양품?" 검증
-└─────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     EfficientNetV2 Backbone                     │
+│                          (mmpretrain)                           │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ├──────────────────────────────────────────┐
+         ▼                                          ▼
+  Multi-scale Features                        Final Features
+   (last 4 stages)                           (deepest stage)
+         │                                          │
+         ▼                              ┌───────────┴───────────┐
+┌─────────────────┐                     │                       │
+│       FPN       │                     ▼                       ▼
+│ (256-ch fusion) │           ┌─────────────────┐    ┌─────────────────────┐
+└────────┬────────┘           │  Classification │    │   GAIN Attention    │
+         │                    │  Head (Baseline)│    │  Module (CBAM+Conv) │
+         │                    └────────┬────────┘    └──────────┬──────────┘
+         │                             │                        │
+         │                    ┌────────┴────────┐      ┌────────┴────────┐
+         │                    ▼                 ▼      ▼                 │
+         │              cls_logits         Weight-CAM  │                 │
+         │                                             ▼                 ▼
+         │                              ┌─────────────────┐    attended_features
+         │                              │ Attention Mining│           │
+         │                              │      Head       │           │
+         │                              └────────┬────────┘           ▼
+         │                                       │           ┌─────────────────┐
+         │                                       ▼           │ Attended Cls    │
+         │                              ┌─────────────────┐  │ Head (Main)     │
+         │                              │  Combine (avg)  │  └────────┬────────┘
+         │                              └────────┬────────┘           │
+         │                                       │                    ▼
+         │                                       ▼            attended_cls_logits
+         │                                attention_map        (최종 분류 출력)
+         │
+         ▼
+┌─────────────────┐
+│  Localization   │
+│      Head       │
+└────────┬────────┘
+         ▼
+  localization_map
+   (결함 위치 예측)
+
+
+══════════════════════════════════════════════════════════════════
+                 Counterfactual Module (학습 시만)
+══════════════════════════════════════════════════════════════════
+  final_features + defect_mask + attention_map
+                    │
+                    ▼
+         ┌─────────────────────┐
+         │    Mask Processor   │──► suppression_mask
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │  Feature Suppressor │──► "결함 영역 제거된 features"
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │   CF Classifier     │──► cf_logits (should predict "양품")
+         └─────────────────────┘
 ```
+
+### 핵심 데이터 흐름
+
+| 모듈 | 입력 | 출력 | 역할 |
+|------|------|------|------|
+| Classification Head | final_features | cls_logits, CAM | Baseline 분류 (비교용) |
+| GAIN Attention | final_features | attended_features, attention_map | 결함 영역 주목 학습 |
+| Attended Cls Head | attended_features | **attended_cls_logits** | **최종 분류 출력** |
+| Localization Head | fpn_fused | localization_map | 결함 위치 segmentation |
+| Counterfactual | features + mask | cf_logits | 판단 근거 검증 |
 
 ## Strategy별 Forward 출력 사용
 
