@@ -379,8 +379,8 @@ class GAINMTLTrainer:
                         stage=getattr(self, 'current_stage', None),
                     )
 
-        # Compute averages
-        avg_losses = {k: np.mean(v) for k, v in total_losses.items()}
+        # Compute averages (convert to float for JSON serialization)
+        avg_losses = {k: float(np.mean(v)) for k, v in total_losses.items()}
 
         # Log to W&B logger if available
         if self.logger is not None:
@@ -457,16 +457,16 @@ class GAINMTLTrainer:
                 )
                 all_cam_ious.extend(cam_iou.cpu().numpy())
 
-        # Compute metrics
+        # Compute metrics (convert to float for JSON serialization)
         all_preds = np.array(all_preds)
         all_labels = np.array(all_labels)
 
-        accuracy = (all_preds == all_labels).mean()
-        avg_losses = {k: np.mean(v) for k, v in total_losses.items()}
+        accuracy = float((all_preds == all_labels).mean())
+        avg_losses = {k: float(np.mean(v)) for k, v in total_losses.items()}
 
         metrics = {
             'accuracy': accuracy,
-            'cam_iou': np.mean(all_cam_ious) if all_cam_ious else 0.0,
+            'cam_iou': float(np.mean(all_cam_ious)) if all_cam_ious else 0.0,
             **{f'val_{k}': v for k, v in avg_losses.items()}
         }
 
