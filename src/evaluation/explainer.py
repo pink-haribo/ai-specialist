@@ -183,6 +183,7 @@ class DefectExplainer:
         save_path: Optional[str] = None,
         figsize: Tuple[int, int] = (15, 10),
         image_path: Optional[str] = None,
+        gt_label: Optional[int] = None,
     ) -> plt.Figure:
         """
         Visualize explanation.
@@ -194,6 +195,7 @@ class DefectExplainer:
             save_path: Path to save figure
             figsize: Figure size
             image_path: Optional source image path to display
+            gt_label: Optional ground truth label (0=Normal, 1=Defective)
 
         Returns:
             Matplotlib figure
@@ -224,8 +226,15 @@ class DefectExplainer:
         # Bottom row: Localization, CAM vs GT, Counterfactual
         fig, axes = plt.subplots(2, 3, figsize=figsize)
 
+        # Build suptitle with source path and GT label
+        suptitle_parts = []
         if image_path:
-            fig.suptitle(f'Source: {image_path}', fontsize=9, color='gray', y=0.99)
+            suptitle_parts.append(f'Source: {image_path}')
+        if gt_label is not None:
+            gt_label_name = self.class_names[gt_label]
+            suptitle_parts.append(f'GT: {gt_label_name}')
+        if suptitle_parts:
+            fig.suptitle('  |  '.join(suptitle_parts), fontsize=10, y=0.995)
 
         # === Top Row ===
 
@@ -326,7 +335,7 @@ class DefectExplainer:
             )
         axes[1, 2].axis('off')
 
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
 
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
