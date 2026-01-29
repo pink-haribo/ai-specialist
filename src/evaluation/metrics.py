@@ -42,11 +42,11 @@ def compute_classification_metrics(
     """
     metrics = {}
 
-    # Basic metrics
-    metrics['accuracy'] = accuracy_score(labels, predictions)
-    metrics['precision'] = precision_score(labels, predictions, zero_division=0)
-    metrics['recall'] = recall_score(labels, predictions, zero_division=0)
-    metrics['f1'] = f1_score(labels, predictions, zero_division=0)
+    # Basic metrics (convert to float for JSON serialization)
+    metrics['accuracy'] = float(accuracy_score(labels, predictions))
+    metrics['precision'] = float(precision_score(labels, predictions, zero_division=0))
+    metrics['recall'] = float(recall_score(labels, predictions, zero_division=0))
+    metrics['f1'] = float(f1_score(labels, predictions, zero_division=0))
 
     # AUC-ROC (if probabilities provided)
     if probabilities is not None and len(np.unique(labels)) > 1:
@@ -56,7 +56,7 @@ def compute_classification_metrics(
                 probs = probabilities[:, 1]
             else:
                 probs = probabilities
-            metrics['auc_roc'] = roc_auc_score(labels, probs)
+            metrics['auc_roc'] = float(roc_auc_score(labels, probs))
         except ValueError:
             metrics['auc_roc'] = 0.0
     else:
@@ -70,9 +70,9 @@ def compute_classification_metrics(
         metrics['true_negative'] = int(tn)
         metrics['false_positive'] = int(fp)
         metrics['false_negative'] = int(fn)
-        metrics['specificity'] = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        metrics['false_positive_rate'] = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-        metrics['false_negative_rate'] = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+        metrics['specificity'] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+        metrics['false_positive_rate'] = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
+        metrics['false_negative_rate'] = float(fn / (fn + tp)) if (fn + tp) > 0 else 0.0
 
     return metrics
 
@@ -144,9 +144,9 @@ def compute_cam_metrics(
         energy_inside.append(energy_ratio)
 
     metrics = {
-        'cam_iou': np.mean(ious) if ious else 0.0,
-        'point_game': np.mean(point_games) if point_games else 0.0,
-        'energy_inside': np.mean(energy_inside) if energy_inside else 0.0,
+        'cam_iou': float(np.mean(ious)) if ious else 0.0,
+        'point_game': float(np.mean(point_games)) if point_games else 0.0,
+        'energy_inside': float(np.mean(energy_inside)) if energy_inside else 0.0,
     }
 
     return metrics
