@@ -18,6 +18,20 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.models import GAINMTLModel
@@ -222,7 +236,7 @@ def main():
             'per_image_results': per_image_results,
         }
         with open(args.export_results, 'w') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
+            json.dump(export_data, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
         print(f'\nResults exported to: {args.export_results}')
         print(f'  - Aggregate metrics: {len(metrics)} metrics')
         print(f'  - Per-image results: {len(per_image_results)} images')
