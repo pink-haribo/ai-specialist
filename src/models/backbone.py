@@ -57,30 +57,40 @@ class EfficientNetV2Backbone(nn.Module):
     #   out_indices=0 -> stem output
     #   out_indices=1 -> stage 1 output (first block)
     #   out_indices=2 -> stage 2 output, etc.
+    #
+    # head_channels: projection channel count matching mmpretrain's conv_head
+    # (1x1 Conv + BN + SiLU that projects final stage features before classifier).
+    # This projection is critical for weight-based CAM quality.
     ARCH_SETTINGS = {
         'b0': {
             # stem=32, stages=[16, 32, 48, 96, 112, 192]
             'out_channels': [32, 16, 32, 48, 96, 112, 192],
+            'head_channels': 1280,
         },
         'b1': {
             # stem=32, stages=[16, 32, 48, 96, 128, 208]
             'out_channels': [32, 16, 32, 48, 96, 128, 208],
+            'head_channels': 1280,
         },
         's': {
             # stem=24, stages=[24, 48, 64, 128, 160, 256]
             'out_channels': [24, 24, 48, 64, 128, 160, 256],
+            'head_channels': 1280,
         },
         'm': {
             # stem=24, stages=[24, 48, 80, 160, 176, 304, 512]
             'out_channels': [24, 24, 48, 80, 160, 176, 304, 512],
+            'head_channels': 1280,
         },
         'l': {
             # stem=32, stages=[32, 64, 96, 192, 224, 384, 640]
             'out_channels': [32, 32, 64, 96, 192, 224, 384, 640],
+            'head_channels': 1280,
         },
         'xl': {
             # stem=32, stages=[32, 64, 96, 192, 256, 512, 640]
             'out_channels': [32, 32, 64, 96, 192, 256, 512, 640],
+            'head_channels': 1280,
         },
     }
 
@@ -183,6 +193,16 @@ class EfficientNetV2Backbone(nn.Module):
         """Return the dimension of the final (deepest) feature map."""
         return self._feature_dims[-1]
 
+    @property
+    def head_channels(self) -> int:
+        """Return the projection (conv_head) channel count for this architecture.
+
+        This matches mmpretrain's conv_head output channels, which project
+        the final stage features before the classifier. Using this projection
+        is critical for weight-based CAM quality.
+        """
+        return self.ARCH_SETTINGS[self.arch]['head_channels']
+
     def freeze_stages(self, num_stages: int):
         """
         Freeze the first num_stages stages.
@@ -208,6 +228,12 @@ class EfficientNetV2BackboneFallback(nn.Module):
         'm': 'tf_efficientnetv2_m',
         'l': 'tf_efficientnetv2_l',
         'xl': 'tf_efficientnetv2_xl',
+    }
+
+    # Reuse head_channels from main backbone class
+    ARCH_HEAD_CHANNELS = {
+        'b0': 1280, 'b1': 1280, 's': 1280,
+        'm': 1280, 'l': 1280, 'xl': 1280,
     }
 
     def __init__(
@@ -248,6 +274,7 @@ class EfficientNetV2BackboneFallback(nn.Module):
 
         # Get feature dimensions
         self._feature_dims = self.model.feature_info.channels()
+        self._head_channels = self.ARCH_HEAD_CHANNELS[self.arch]
 
         # Freeze stages
         if frozen_stages >= 0:
@@ -277,6 +304,11 @@ class EfficientNetV2BackboneFallback(nn.Module):
     def final_feature_dim(self) -> int:
         """Return final feature dimension."""
         return self._feature_dims[-1]
+
+    @property
+    def head_channels(self) -> int:
+        """Return the projection (conv_head) channel count for this architecture."""
+        return self._head_channels
 
 
 def get_backbone(
