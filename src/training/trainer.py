@@ -378,6 +378,7 @@ class GAINMTLTrainer:
                         learning_rate=current_lr,
                         stage=getattr(self, 'current_stage', None),
                     )
+                    self.tb_logger.flush()
 
         # Compute averages (convert to float for JSON serialization)
         avg_losses = {k: float(np.mean(v)) for k, v in total_losses.items()}
@@ -393,6 +394,7 @@ class GAINMTLTrainer:
             for name, value in avg_losses.items():
                 self.tb_logger.log_scalar(f'epoch/train_{name}', value, epoch)
             self.tb_logger.log_scalar('epoch/learning_rate', current_lr, epoch)
+            self.tb_logger.flush()
 
         return avg_losses
 
@@ -479,6 +481,7 @@ class GAINMTLTrainer:
         if self.tb_logger is not None:
             for key, value in metrics.items():
                 self.tb_logger.log_scalar(f'val/{key}', value, epoch)
+            self.tb_logger.flush()
 
         return metrics
 

@@ -48,7 +48,7 @@ training:
   min_lr: 1.0e-6
 
   # Data loading
-  num_workers: 4
+  num_workers: 0
   pin_memory: true
 
 # ============ Loss Configuration ============
