@@ -119,6 +119,8 @@ class TensorBoardLogger:
         if stage is not None:
             self.log_scalar('train/stage', stage, step)
 
+        self.writer.flush()
+
     def log_epoch(
         self,
         train_losses: Dict[str, float],
@@ -151,6 +153,8 @@ class TensorBoardLogger:
         # Stage
         if stage is not None:
             self.log_scalar('epoch/stage', stage, epoch)
+
+        self.writer.flush()
 
         # Combined loss comparison
         if 'total' in train_losses and 'val_total' in val_metrics:
@@ -479,6 +483,7 @@ class GAINMTLTrainer:
         if self.tb_logger is not None:
             for key, value in metrics.items():
                 self.tb_logger.log_scalar(f'val/{key}', value, epoch)
+            self.tb_logger.flush()
 
         return metrics
 

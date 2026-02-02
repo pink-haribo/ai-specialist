@@ -6,6 +6,7 @@ from .helpers import (
     count_parameters,
     load_config,
     save_config,
+    print_model_summary,
     AverageMeter,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "count_parameters",
     "load_config",
     "save_config",
+    "print_model_summary",
     "AverageMeter",
 ]
