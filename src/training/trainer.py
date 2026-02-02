@@ -483,6 +483,7 @@ class GAINMTLTrainer:
         if self.tb_logger is not None:
             for key, value in metrics.items():
                 self.tb_logger.log_scalar(f'val/{key}', value, epoch)
+            self.tb_logger.writer.flush()
 
         return metrics
 
@@ -723,6 +724,7 @@ class MultiStageTrainer(GAINMTLTrainer):
                             'train': train_losses['total'],
                             'val': val_metrics['val_total'],
                         }, epoch)
+                    self.tb_logger.writer.flush()
 
                 # Save best model
                 if val_metrics['accuracy'] > self.best_metric:
