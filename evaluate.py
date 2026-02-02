@@ -3,9 +3,13 @@
 Evaluation Script for GAIN-MTL
 
 Usage:
+    # Using work_dir (recommended): derives checkpoint, config, export_results, vis_dir
+    python evaluate.py --work_dir checkpoints/strategy_comparison_v1/strategy_1_classification_only
+    python evaluate.py --work_dir checkpoints/strategy_comparison_v1/strategy_3_full --visualize
+
+    # Using individual paths (legacy)
     python evaluate.py --checkpoint checkpoints/best_model.pth --data_root ./data
     python evaluate.py --checkpoint checkpoints/best_model.pth --visualize
-    python evaluate.py --checkpoint checkpoints/best_model.pth --export_results results.json
 """
 
 import argparse
@@ -35,10 +39,18 @@ from src.utils import get_device, load_config
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate GAIN-MTL model')
 
-    parser.add_argument('--checkpoint', type=str, required=True,
-                        help='Path to model checkpoint')
+    # Work directory mode: derive checkpoint, config, export_results, vis_dir from work_dir
+    parser.add_argument('--work_dir', type=str, default=None,
+                        help='Work directory (e.g. checkpoints/strategy_comparison_.../strategy_1_...). '
+                             'Derives: checkpoint=work_dir/best_model.pth, '
+                             'config=work_dir/../config.yaml, '
+                             'export_results=work_dir/results.json, '
+                             'vis_dir=work_dir/visualize')
+
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Path to model checkpoint (overrides work_dir)')
     parser.add_argument('--config', type=str, default=None,
-                        help='Path to config file (auto-detect from checkpoint dir)')
+                        help='Path to config file (overrides work_dir)')
     parser.add_argument('--data_root', type=str, default='./data',
                         help='Data root directory')
     parser.add_argument('--split', type=str, default='test',
@@ -55,11 +67,11 @@ def parse_args():
 
     # Output options
     parser.add_argument('--export_results', type=str, default=None,
-                        help='Export results to JSON file')
+                        help='Export results to JSON file (overrides work_dir)')
     parser.add_argument('--visualize', action='store_true',
                         help='Generate visualizations')
-    parser.add_argument('--vis_dir', type=str, default='./visualizations',
-                        help='Directory for visualizations')
+    parser.add_argument('--vis_dir', type=str, default=None,
+                        help='Directory for visualizations (overrides work_dir)')
     parser.add_argument('--num_vis_per_class', type=int, default=10,
                         help='Number of samples to visualize per class (defective/normal)')
 
@@ -71,7 +83,29 @@ def parse_args():
     parser.add_argument('--threshold', type=float, default=0.5,
                         help='Classification threshold')
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Derive paths from work_dir
+    if args.work_dir:
+        work_dir = Path(args.work_dir)
+        if args.checkpoint is None:
+            args.checkpoint = str(work_dir / 'best_model.pth')
+        if args.config is None:
+            args.config = str(work_dir.parent / 'config.yaml')
+        if args.export_results is None:
+            args.export_results = str(work_dir / 'results.json')
+        if args.vis_dir is None:
+            args.vis_dir = str(work_dir / 'visualize')
+
+    # Validate: checkpoint is required
+    if args.checkpoint is None:
+        parser.error('Either --work_dir or --checkpoint is required')
+
+    # Defaults for when neither work_dir nor explicit args are given
+    if args.vis_dir is None:
+        args.vis_dir = './visualizations'
+
+    return args
 
 
 def main():
