@@ -211,15 +211,14 @@ class DefectExplainer:
             image = image[0]
         if image.shape[0] == 3:
             image = image.transpose(1, 2, 0)
-        if image.max() <= 1:
-            image = (image * 255).astype(np.uint8)
-
-        # Denormalize if needed
+        # Denormalize if needed (normalized images have negative values)
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
-        if image.max() <= 1:
+        if image.min() < 0:
             image = (image * std + mean) * 255
             image = np.clip(image, 0, 255).astype(np.uint8)
+        elif image.max() <= 1:
+            image = (image * 255).astype(np.uint8)
 
         # Create figure
         # Top row: Image, GT Mask, CAM (defective class)
