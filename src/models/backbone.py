@@ -165,12 +165,16 @@ class EfficientNetV2Backbone(nn.Module):
         self._feature_dims = self._get_feature_dims()
 
     def _get_feature_dims(self) -> List[int]:
-        """Get output feature dimensions for each stage."""
-        arch_settings = self.ARCH_SETTINGS[self.arch]
-        out_channels = arch_settings['out_channels']
+        """Get output feature dimensions for each stage.
 
-        # out_indices에 해당하는 채널 수 반환
-        return [out_channels[i] for i in self.out_indices]
+        Handles both block stages (indices 0..N-1) and the conv_head
+        projection layer (index N) which outputs head_channels.
+        """
+        arch_settings = self.ARCH_SETTINGS[self.arch]
+        # Block stage channels + conv_head projection channels
+        all_channels = arch_settings['out_channels'] + [arch_settings['head_channels']]
+
+        return [all_channels[i] for i in self.out_indices]
 
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
@@ -192,16 +196,6 @@ class EfficientNetV2Backbone(nn.Module):
     def final_feature_dim(self) -> int:
         """Return the dimension of the final (deepest) feature map."""
         return self._feature_dims[-1]
-
-    @property
-    def head_channels(self) -> int:
-        """Return the projection (conv_head) channel count for this architecture.
-
-        This matches mmpretrain's conv_head output channels, which project
-        the final stage features before the classifier. Using this projection
-        is critical for weight-based CAM quality.
-        """
-        return self.ARCH_SETTINGS[self.arch]['head_channels']
 
     def freeze_stages(self, num_stages: int):
         """
@@ -228,12 +222,6 @@ class EfficientNetV2BackboneFallback(nn.Module):
         'm': 'tf_efficientnetv2_m',
         'l': 'tf_efficientnetv2_l',
         'xl': 'tf_efficientnetv2_xl',
-    }
-
-    # Reuse head_channels from main backbone class
-    ARCH_HEAD_CHANNELS = {
-        'b0': 1280, 'b1': 1280, 's': 1280,
-        'm': 1280, 'l': 1280, 'xl': 1280,
     }
 
     def __init__(
@@ -274,7 +262,6 @@ class EfficientNetV2BackboneFallback(nn.Module):
 
         # Get feature dimensions
         self._feature_dims = self.model.feature_info.channels()
-        self._head_channels = self.ARCH_HEAD_CHANNELS[self.arch]
 
         # Freeze stages
         if frozen_stages >= 0:
@@ -305,10 +292,6 @@ class EfficientNetV2BackboneFallback(nn.Module):
         """Return final feature dimension."""
         return self._feature_dims[-1]
 
-    @property
-    def head_channels(self) -> int:
-        """Return the projection (conv_head) channel count for this architecture."""
-        return self._head_channels
 
 
 def get_backbone(

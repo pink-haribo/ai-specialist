@@ -126,19 +126,26 @@ class GAINMTLModel(nn.Module):
         self._cam_prob_key = 'attention_map_prob'
 
         # ============ Backbone (mmpretrain EfficientNetV2) ============
-        # Use the last 4 stages of the backbone for both FPN and classification.
-        # This ensures FPN gets deep multi-scale features and classification
-        # uses the deepest stage, matching standard detection/segmentation practice.
+        # Mmpretrain's EfficientNetV2 has block stages + a conv_head projection
+        # layer (1x1 Conv + BN + SiLU) as the final layer. For example:
+        #   B0/B1/S: layers 0-7 (0=stem, 1-6=blocks, 7=conv_head 192→1280)
+        #   M/L/XL:  layers 0-8 (0=stem, 1-7=blocks, 8=conv_head →1280)
         #
-        # EfficientNetV2 stage counts (stem + block stages):
-        #   B0/B1/S: 7 (indices 0-6) → last 4 = (3,4,5,6)
-        #   M/L/XL:  8 (indices 0-7) → last 4 = (4,5,6,7)
+        # We include the conv_head layer in out_indices so that:
+        #   - FPN receives block stage features (e.g. stages 3-6)
+        #   - Classification/CAM receives the conv_head output (1280ch, pretrained)
+        #
+        # Using the pretrained conv_head is critical for CAM quality: its 1280
+        # channels are pretrained on ImageNet to be semantically meaningful,
+        # enabling the linear classifier to form discriminative weight-based CAMs.
         arch_settings = EfficientNetV2Backbone.ARCH_SETTINGS.get(backbone_arch.lower())
         if arch_settings is not None:
             num_stages = len(arch_settings['out_channels'])
-            last_stage_idx = num_stages - 1
+            last_block_idx = num_stages - 1
+            conv_head_idx = num_stages  # conv_head is always the next layer after blocks
             num_fpn_levels = min(4, num_stages - 1)  # Exclude stem (index 0)
-            out_indices = tuple(range(last_stage_idx - num_fpn_levels + 1, last_stage_idx + 1))
+            fpn_indices = tuple(range(last_block_idx - num_fpn_levels + 1, last_block_idx + 1))
+            out_indices = fpn_indices + (conv_head_idx,)
 
         self.backbone = get_backbone(
             arch=backbone_arch,
@@ -147,26 +154,14 @@ class GAINMTLModel(nn.Module):
             out_indices=out_indices,
         )
         backbone_channels = self.backbone.get_feature_dims()
-        backbone_final_channels = backbone_channels[-1]
-
-        # ============ Projection Layer (conv_head) ============
-        # Matches mmpretrain's EfficientNetV2 conv_head that projects the final
-        # stage features (e.g. 192ch for B0) to head_channels (1280).
-        # This projection is critical for weight-based CAM quality: more channels
-        # give the linear classifier more dimensions to form discriminative CAMs.
-        head_channels = self.backbone.head_channels
-        self.conv_head = nn.Sequential(
-            nn.Conv2d(backbone_final_channels, head_channels, 1, bias=False),
-            nn.BatchNorm2d(head_channels),
-            nn.SiLU(inplace=True),
-        )
-        final_channels = head_channels
+        # Last output is conv_head (1280ch); preceding outputs are block stages for FPN
+        fpn_channels_list = backbone_channels[:-1]
+        final_channels = backbone_channels[-1]  # conv_head output (e.g. 1280)
 
         # ============ Feature Pyramid Network ============
-        # FPN uses all returned features (multi-scale);
-        # classification uses final_features (the deepest stage, also in FPN).
+        # FPN uses block stage features (excluding conv_head).
         self.fpn = FeaturePyramidNetwork(
-            in_channels_list=backbone_channels,
+            in_channels_list=fpn_channels_list,
             out_channels=fpn_channels,
         )
 
@@ -239,7 +234,6 @@ class GAINMTLModel(nn.Module):
         weights are preserved.
         """
         modules_to_init = [
-            self.conv_head,
             self.fpn,
             self.attention_module,
             self.attention_mining_head,
@@ -295,16 +289,15 @@ class GAINMTLModel(nn.Module):
         input_size = x.shape[2:]  # (H, W)
 
         # ============ Feature Extraction ============
-        # Multi-scale features from backbone (last 4 stages)
-        multi_scale_features = self.backbone(x)
-
-        # Project final-stage features through conv_head (e.g. 192 → 1280 for B0)
-        # This matches mmpretrain's classifier conv_head and is critical for CAM quality.
-        final_features = self.conv_head(multi_scale_features[-1])
+        # Backbone returns block stage features + conv_head output.
+        # e.g. for B0: [stage3(48ch), stage4(96ch), stage5(112ch), stage6(192ch), conv_head(1280ch)]
+        all_features = self.backbone(x)
+        fpn_features_in = all_features[:-1]   # Block stages → FPN
+        final_features = all_features[-1]      # conv_head output → classification/CAM
 
         # ============ FPN Processing ============
-        fpn_features = self.fpn(multi_scale_features)
-        fpn_fused = self.fpn.get_fused_features(multi_scale_features)
+        fpn_features = self.fpn(fpn_features_in)
+        fpn_fused = self.fpn.get_fused_features(fpn_features_in)
 
         # ============ GAIN Attention ============
         # Generate attention logits through guided attention module
