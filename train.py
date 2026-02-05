@@ -372,21 +372,13 @@ def train_single_strategy(
                     val_metrics
                 )
 
-        # Periodic checkpoint
-        if epoch % training_config.save_interval == 0:
-            trainer.save_checkpoint(
-                str(exp_dir / f'checkpoint_epoch_{epoch}.pth'),
-                epoch,
-                val_metrics if epoch % training_config.eval_interval == 0 else {}
-            )
-
         # Update scheduler
         if scheduler is not None:
             scheduler.step()
 
-    # Save final model
+    # Save last model
     trainer.save_checkpoint(
-        str(exp_dir / 'final_model.pth'),
+        str(exp_dir / 'last_model.pth'),
         num_epochs - 1,
         val_metrics
     )
