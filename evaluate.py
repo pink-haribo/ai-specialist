@@ -72,8 +72,6 @@ def parse_args():
                         help='Generate visualizations')
     parser.add_argument('--vis_dir', type=str, default=None,
                         help='Directory for visualizations (overrides work_dir)')
-    parser.add_argument('--num_vis_per_class', type=int, default=10,
-                        help='Number of samples to visualize per class (defective/normal)')
 
     # Analysis options
     parser.add_argument('--per_class', action='store_true',
@@ -243,7 +241,6 @@ def main():
             dataloader=dataloader,
             device=device,
             output_dir=vis_dir,
-            num_per_class=args.num_vis_per_class,
             strategy=args.strategy,
         )
 
@@ -342,14 +339,15 @@ def perform_error_analysis(model, dataloader, device, threshold=0.5):
     print(f'  Correct prediction but wrong attention: {correct_but_wrong_cam}')
 
 
-def generate_visualizations(model, dataloader, device, output_dir, num_per_class=10, strategy=3):
-    """Generate visualization for balanced defective/normal samples."""
+def generate_visualizations(model, dataloader, device, output_dir, strategy=3):
+    """Generate visualization for all samples in the dataloader."""
     import matplotlib
     matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
 
     explainer = DefectExplainer(model, device, strategy=strategy)
 
-    # Collect balanced samples: separate defective and normal
+    # Collect all samples, separated by class
     defective_samples = []
     normal_samples = []
     for batch in dataloader:
@@ -360,33 +358,38 @@ def generate_visualizations(model, dataloader, device, output_dir, num_per_class
                 'label': batch['label'][i].item(),
                 'path': batch.get('image_path', [None])[i] if 'image_path' in batch else None,
             }
-            if sample['label'] == 1 and len(defective_samples) < num_per_class:
+            if sample['label'] == 1:
                 defective_samples.append(sample)
-            elif sample['label'] == 0 and len(normal_samples) < num_per_class:
+            else:
                 normal_samples.append(sample)
 
-            if len(defective_samples) >= num_per_class and len(normal_samples) >= num_per_class:
-                break
-        if len(defective_samples) >= num_per_class and len(normal_samples) >= num_per_class:
-            break
+    print(f'Collected {len(defective_samples)} defective, {len(normal_samples)} normal samples (total: {len(defective_samples) + len(normal_samples)})')
 
-    print(f'Collected {len(defective_samples)} defective, {len(normal_samples)} normal samples')
+    # Generate visualizations: defective first, then normal
+    defective_count = 0
+    normal_count = 0
 
-    # Defective first, then normal
-    samples = defective_samples + normal_samples
-
-    # Generate visualizations
-    for i, sample in enumerate(tqdm(samples, desc='Generating visualizations')):
-        label_tag = 'defective' if sample['label'] == 1 else 'normal'
+    for sample in tqdm(defective_samples, desc='Visualizing defective'):
         fig = explainer.visualize(
             image=sample['image'],
             defect_mask=sample['defect_mask'].numpy() if sample['defect_mask'] is not None else None,
-            save_path=str(output_dir / f'{label_tag}_{i:03d}.png'),
+            save_path=str(output_dir / f'defective_{defective_count:03d}.png'),
             image_path=sample['path'],
             gt_label=sample['label'],
         )
-        import matplotlib.pyplot as plt
         plt.close(fig)
+        defective_count += 1
+
+    for sample in tqdm(normal_samples, desc='Visualizing normal'):
+        fig = explainer.visualize(
+            image=sample['image'],
+            defect_mask=sample['defect_mask'].numpy() if sample['defect_mask'] is not None else None,
+            save_path=str(output_dir / f'normal_{normal_count:03d}.png'),
+            image_path=sample['path'],
+            gt_label=sample['label'],
+        )
+        plt.close(fig)
+        normal_count += 1
 
 
 if __name__ == '__main__':
