@@ -156,12 +156,11 @@ class TensorBoardLogger:
 
         self.writer.flush()
 
-        # Combined loss comparison
+        # Combined loss comparison (use add_scalar instead of add_scalars
+        # to avoid creating orphan event files that corrupt TensorBoard x-axis)
         if 'total' in train_losses and 'val_total' in val_metrics:
-            self.log_scalars('compare/loss', {
-                'train': train_losses['total'],
-                'val': val_metrics['val_total'],
-            }, epoch)
+            self.log_scalar('compare/train_loss', train_losses['total'], epoch)
+            self.log_scalar('compare/val_loss', val_metrics['val_total'], epoch)
 
     def log_model_gradients(self, model: nn.Module, step: int):
         """Log model gradient statistics."""
@@ -397,6 +396,7 @@ class GAINMTLTrainer:
             for name, value in avg_losses.items():
                 self.tb_logger.log_scalar(f'epoch/train_{name}', value, epoch)
             self.tb_logger.log_scalar('epoch/learning_rate', current_lr, epoch)
+            self.tb_logger.flush()
 
         return avg_losses
 
@@ -718,12 +718,11 @@ class MultiStageTrainer(GAINMTLTrainer):
                 if self.tb_logger is not None:
                     for name, value in val_metrics.items():
                         self.tb_logger.log_scalar(f'epoch/val_{name}', value, epoch)
-                    # Combined loss comparison
+                    # Combined loss comparison (use add_scalar instead of add_scalars
+                    # to avoid creating orphan event files that corrupt TensorBoard x-axis)
                     if 'total' in train_losses and 'val_total' in val_metrics:
-                        self.tb_logger.log_scalars('compare/loss', {
-                            'train': train_losses['total'],
-                            'val': val_metrics['val_total'],
-                        }, epoch)
+                        self.tb_logger.log_scalar('compare/train_loss', train_losses['total'], epoch)
+                        self.tb_logger.log_scalar('compare/val_loss', val_metrics['val_total'], epoch)
                     self.tb_logger.flush()
 
                 # Save best model
