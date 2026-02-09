@@ -503,6 +503,15 @@ class GAINMTLTrainer:
                 align_corners=False
             )
 
+        # Per-image min-max normalization for fair CAM evaluation
+        B = attention_map.shape[0]
+        attn_flat = attention_map.view(B, -1)
+        attn_min = attn_flat.min(dim=1, keepdim=True)[0]
+        attn_max = attn_flat.max(dim=1, keepdim=True)[0]
+        attn_range = (attn_max - attn_min).clamp(min=1e-6)
+        attn_flat = (attn_flat - attn_min) / attn_range
+        attention_map = attn_flat.view_as(attention_map)
+
         # Binarize
         attention_binary = (attention_map > threshold).float()
         mask_binary = (defect_mask > threshold).float()

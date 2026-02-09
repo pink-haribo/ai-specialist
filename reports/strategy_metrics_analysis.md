@@ -145,12 +145,42 @@ interpretability — highlighting a **classification vs. interpretability tradeo
 
 ---
 
-## 7. Conclusion
+## 7. Applied Changes
+
+All recommendations have been implemented in the codebase:
+
+### 7.1 Strategy Weight Adjustments (`train.py`)
+
+| Change | S3 | S4 | S5 |
+|--------|----|----|-----|
+| `lambda_cam_guide` | 0.0 → **0.3** | 0.0 → **0.3** | 0.0 → **0.3** |
+| `lambda_guide` | 0.3 → **0.5** | 0.5 (unchanged) | 0.5 (unchanged) |
+| `lambda_loc` | N/A | 0.3 → **0.2** | 0.3 → **0.2** |
+
+### 7.2 Gradual Localization Warmup (`train.py`)
+
+- Added `loc_warmup_ratio: 0.5` to S4 and S5
+- `lambda_loc` linearly increases from 0.0 to target value over the first 50% of epochs
+- Uses existing `criterion.update_weights()` API for clean integration
+
+### 7.3 Per-Image CAM Normalization (`metrics.py`, `trainer.py`)
+
+- Added min-max normalization per image before threshold-based binarization
+- Applied consistently across: `compute_cam_metrics`, `_compute_per_image_cam_metrics`, `_compute_cam_iou`
+- This ensures fair CAM evaluation for unsupervised strategies (S1) where raw sigmoid
+  outputs may be concentrated in a narrow range far from the 0.5 threshold
+
+---
+
+## 8. Conclusion
 
 - **S5 (Full)** is the recommended production model based on classification metrics.
 - The **classification-interpretability gap** between S2 and S5 suggests that combining both
   direct CAM supervision and counterfactual reasoning could yield optimal results.
+  **This has now been addressed by adding `lambda_cam_guide: 0.3` to S3~S5.**
 - **S4's regression** is a clear signal that loss weight balancing and multi-task training
-  scheduling need refinement.
+  scheduling need refinement. **This has been addressed by reducing `lambda_loc` to 0.2
+  and adding gradual localization warmup over 50% of training.**
 - The **gap vs. expected results**, especially S1's CAM-IoU, warrants investigation of the
-  evaluation pipeline itself before drawing final conclusions.
+  evaluation pipeline itself. **Per-image min-max CAM normalization has been added to
+  address this.**
