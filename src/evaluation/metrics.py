@@ -122,6 +122,14 @@ def compute_cam_metrics(
         if mask.sum() == 0:
             continue
 
+        # Per-image min-max normalization (standard for CAM evaluation)
+        # Without this, unsupervised CAMs (e.g. Strategy 1) may have values
+        # concentrated in a narrow range, making fixed thresholding ineffective.
+        attn_min = attn.min()
+        attn_max = attn.max()
+        if attn_max - attn_min > 1e-6:
+            attn = (attn - attn_min) / (attn_max - attn_min)
+
         # 1. CAM-IoU
         attn_binary = (attn > threshold).astype(np.float32)
         mask_binary = (mask > threshold).astype(np.float32)
@@ -305,6 +313,12 @@ def _compute_per_image_cam_metrics(
 
     if mask.sum() == 0:
         return {'cam_iou': 0.0, 'point_game': 0.0, 'energy_inside': 0.0}
+
+    # Per-image min-max normalization (consistent with compute_cam_metrics)
+    attn_min = attn.min()
+    attn_max = attn.max()
+    if attn_max - attn_min > 1e-6:
+        attn = (attn - attn_min) / (attn_max - attn_min)
 
     attn_bin = (attn > threshold).astype(np.float32)
     mask_bin = (mask > threshold).astype(np.float32)

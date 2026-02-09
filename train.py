@@ -90,42 +90,44 @@ STRATEGY_CONFIGS = {
     },
     3: {
         'name': 'cls_attention_mining',
-        'description': 'Classification + Attention Mining',
+        'description': 'Classification + Attention Mining + CAM Guidance',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
-            'lambda_cam_guide': 0.0,
+            'lambda_cam_guide': 0.3,
             'lambda_loc': 0.0,
-            'lambda_guide': 0.3,
+            'lambda_guide': 0.5,
             'lambda_cf': 0.0,
             'lambda_consist': 0.0,
         }
     },
     4: {
         'name': 'cls_attention_localization',
-        'description': 'Classification + Attention Mining + Localization',
+        'description': 'Classification + Attention Mining + Localization + CAM Guidance',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
-            'lambda_cam_guide': 0.0,
-            'lambda_loc': 0.3,
+            'lambda_cam_guide': 0.3,
+            'lambda_loc': 0.2,
             'lambda_guide': 0.5,
             'lambda_cf': 0.0,
             'lambda_consist': 0.2,
-        }
+        },
+        'loc_warmup_ratio': 0.5,
     },
     5: {
         'name': 'full',
-        'description': 'Full training with all losses (including Counterfactual)',
+        'description': 'Full training with all losses (including Counterfactual + CAM Guidance)',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
-            'lambda_cam_guide': 0.0,
-            'lambda_loc': 0.3,
+            'lambda_cam_guide': 0.3,
+            'lambda_loc': 0.2,
             'lambda_guide': 0.5,
             'lambda_cf': 0.3,
             'lambda_consist': 0.2,
-        }
+        },
+        'loc_warmup_ratio': 0.5,
     },
 }
 
@@ -343,9 +345,26 @@ def train_single_strategy(
     num_epochs = config['training']['num_epochs']
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': [], 'val_cam_iou': []}
 
+    # Localization warmup config
+    loc_warmup_ratio = strategy.get('loc_warmup_ratio', 0.0)
+    target_lambda_loc = strategy['weights']['lambda_loc']
+    if loc_warmup_ratio > 0 and target_lambda_loc > 0:
+        loc_warmup_epochs = int(num_epochs * loc_warmup_ratio)
+        print(f'Localization warmup: lambda_loc 0.0 → {target_lambda_loc} over {loc_warmup_epochs} epochs\n')
+    else:
+        loc_warmup_epochs = 0
+
     print(f'Starting training for {num_epochs} epochs...\n')
 
     for epoch in range(num_epochs):
+        # Gradual localization warmup: linearly increase lambda_loc
+        if loc_warmup_epochs > 0:
+            if epoch < loc_warmup_epochs:
+                warmup_loc = target_lambda_loc * (epoch / loc_warmup_epochs)
+            else:
+                warmup_loc = target_lambda_loc
+            criterion.update_weights(lambda_loc=warmup_loc)
+
         # Train
         train_losses = trainer.train_epoch(train_loader, epoch)
         history['train_loss'].append(train_losses['total'])
