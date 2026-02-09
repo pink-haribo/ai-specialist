@@ -241,7 +241,8 @@ data:
 loss:
   lambda_cls: 1.0       # Classification
   lambda_am: 0.5        # Attention Mining
-  lambda_loc: 0.3       # Localization
+  lambda_cam_guide: 0.3 # CAM Guidance (S3~S5에서 직접 CAM supervision)
+  lambda_loc: 0.2       # Localization (0.3→0.2, warmup 적용)
   lambda_guide: 0.5     # Guided Attention (핵심!)
   lambda_cf: 0.3        # Counterfactual
   lambda_consist: 0.2   # Consistency
@@ -396,9 +397,9 @@ forward() 출력:
 |----------|------|-----------|----------|-----------|
 | **1** | Classification only | `cls_logits` | `cam_prob` | cls |
 | **2** | + CAM Guidance | `cls_logits` | `cam_prob` | cls + cam_bce + cam_dice |
-| **3** | + Attention Mining | `attended_cls_logits` | `attention_map_prob` | cls + am + guide |
-| **4** | + Localization | `attended_cls_logits` | `attention_map_prob` | 3 + loc + consist |
-| **5** | Full | `attended_cls_logits` | `attention_map_prob` | 4 + cf |
+| **3** | + Attention Mining + CAM Guidance | `attended_cls_logits` | `attention_map_prob` | cls + am + guide + cam_guide |
+| **4** | + Localization (warmup) | `attended_cls_logits` | `attention_map_prob` | 3 + loc + consist |
+| **5** | Full + Counterfactual | `attended_cls_logits` | `attention_map_prob` | 4 + cf |
 
 - **Strategy 1-2**: attention module을 학습하지 않으므로 `cls_logits` + `cam_prob` 사용
 - **Strategy 3+**: attention module이 학습되므로 `attended_cls_logits` + `attention_map_prob` 사용
@@ -409,7 +410,8 @@ forward() 출력:
 ```python
 Total Loss = λ_cls × L_cls           # Classification (Focal Loss)
            + λ_am × L_am             # Attention Mining (GAIN S_am)
-           + λ_loc × L_loc           # Localization (Dice + BCE)
+           + λ_cam_guide × L_cam     # CAM Guidance (직접 CAM supervision)
+           + λ_loc × L_loc           # Localization (Dice + BCE, warmup 적용)
            + λ_guide × L_guide       # Guided Attention (핵심!)
            + λ_cf × L_cf             # Counterfactual
            + λ_consist × L_consist   # Attention-Localization 일관성
@@ -417,14 +419,15 @@ Total Loss = λ_cls × L_cls           # Classification (Focal Loss)
 
 ### Loss 설명
 
-| Loss | 역할 | 대상 |
-|------|------|------|
-| `L_cls` | 양품/불량 분류 | 전체 |
-| `L_am` | Attended features도 분류 | 전체 |
-| `L_loc` | 결함 위치 segmentation | 불량만 |
-| `L_guide` | Attention이 결함 위치와 일치 | 불량만 |
-| `L_cf` | 결함 제거 시 양품 예측 | 불량만 |
-| `L_consist` | Attention ≈ Localization | 불량만 |
+| Loss | 역할 | 대상 | 적용 Strategy |
+|------|------|------|---------------|
+| `L_cls` | 양품/불량 분류 | 전체 | S1~S5 |
+| `L_am` | Attended features도 분류 | 전체 | S3~S5 |
+| `L_cam_guide` | Weight-based CAM이 결함 위치와 일치 | 불량만 | S2~S5 |
+| `L_loc` | 결함 위치 segmentation (warmup) | 불량만 | S4~S5 |
+| `L_guide` | Attention이 결함 위치와 일치 | 불량만 | S3~S5 |
+| `L_cf` | 결함 제거 시 양품 예측 | 불량만 | S5 |
+| `L_consist` | Attention ≈ Localization | 불량만 | S4~S5 |
 
 ## 평가 지표
 
@@ -438,6 +441,8 @@ Total Loss = λ_cls × L_cls           # Classification (Focal Loss)
 | **CAM-IoU** | Attention map과 GT mask의 IoU | ↑ |
 | **PointGame** | 최대 activation이 결함 내부 비율 | ↑ |
 | **Energy-Inside** | 결함 영역 내 attention 에너지 비율 | ↑ |
+
+> CAM 평가 시 이미지별 min-max normalization을 적용하여 전략 간 공정한 비교를 보장합니다.
 
 ### Localization Metrics
 - IoU, Dice, Pixel Accuracy
