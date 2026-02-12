@@ -376,6 +376,9 @@ class GAINMTLModel(nn.Module):
             'localization_map': localization_logits,          # Localization logits
             'attention_map_main': attention_logits,           # Main attention logits
             'attention_map_mined': mined_attention_logits,    # Mined attention logits
+            # Internal attention (always from attention module, before external override)
+            # Used by guide loss in Strategy 6 to supervise internal attention with GT mask
+            'attention_map_internal': combined_logits_int,
             # Spatial maps — probabilities (sigmoid-applied) for evaluation
             'attention_map_prob': torch.sigmoid(combined_attention_logits),
             'cam_prob': torch.sigmoid(cam_logits),

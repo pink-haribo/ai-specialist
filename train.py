@@ -137,7 +137,7 @@ STRATEGY_CONFIGS = {
             'lambda_am': 0.5,
             'lambda_cam_guide': 0.0,
             'lambda_loc': 0.0,
-            'lambda_guide': 0.0,
+            'lambda_guide': 0.5,
             'lambda_cf': 0.0,
             'lambda_consist': 0.0,
         },
