@@ -382,7 +382,8 @@ forward() 출력:
 │
 ├── Spatial maps (logits, loss용)
 │   ├── cam                     ← classification_head의 weight × features
-│   ├── attention_map           ← attention_module + mining_head
+│   ├── attention_map           ← attention_module + mining_head (S6: GT mask로 override 가능)
+│   ├── attention_map_internal  ← attention_module + mining_head (항상 내부 생성, guide loss용)
 │   └── localization_map        ← localization_head (FPN 기반)
 │
 └── Spatial maps (probabilities, 평가/시각화용)
@@ -400,10 +401,36 @@ forward() 출력:
 | **3** | + Attention Mining + CAM Guidance | `attended_cls_logits` | `attention_map_prob` | cls + am + guide + cam_guide |
 | **4** | + Localization (warmup) | `attended_cls_logits` | `attention_map_prob` | 3 + loc + consist |
 | **5** | Full + Counterfactual | `attended_cls_logits` | `attention_map_prob` | 4 + cf |
+| **6** | Full + GT Mask Attention | `attended_cls_logits` | `attention_map_prob` | 5와 동일 |
 
 - **Strategy 1-2**: attention module을 학습하지 않으므로 `cls_logits` + `cam_prob` 사용
-- **Strategy 3+**: attention module이 학습되므로 `attended_cls_logits` + `attention_map_prob` 사용
+- **Strategy 3-5**: attention module이 학습되므로 `attended_cls_logits` + `attention_map_prob` 사용
+- **Strategy 6**: Strategy 5 기반 + GT mask가 있으면 feature adapter에 직접 주입
 - `model.set_strategy(n)` 호출로 `predict()`, `get_explanation()`, 평가 시 자동 선택
+
+### Strategy 6: GT Mask Attention
+
+Strategy 5의 모든 loss를 유지하면서, **GT defect mask가 있는 샘플은 mask를 직접 attention으로 사용**합니다.
+
+```
+배치 내 샘플별 자동 분기:
+
+  mask 있는 defect ──→ GT mask × features ──→ feature_adapter ──→ attended_cls
+  mask 없는 defect ──→ 내부 attention × features ──→ feature_adapter ──→ attended_cls
+  normal ────────────→ 내부 attention × features ──→ feature_adapter ──→ attended_cls
+```
+
+- **GT mask → feature adapter**: mask가 있으면 모델이 정확한 결함 영역만 보고 분류
+- **Guide loss (내부 attention vs GT mask)**: mask가 있는 샘플로 attention module을 supervision하여, mask 없는 샘플에서도 좋은 attention 생성
+- mask 유무에 관계없이 내부 attention module은 항상 학습됨
+
+```bash
+# Strategy 6만 학습
+python train.py --strategies 6
+
+# Strategy 5와 비교
+python train.py --strategies 5 6
+```
 
 ## Loss Functions
 
@@ -421,13 +448,13 @@ Total Loss = λ_cls × L_cls           # Classification (Focal Loss)
 
 | Loss | 역할 | 대상 | 적용 Strategy |
 |------|------|------|---------------|
-| `L_cls` | 양품/불량 분류 | 전체 | S1~S5 |
-| `L_am` | Attended features도 분류 | 전체 | S3~S5 |
-| `L_cam_guide` | Weight-based CAM이 결함 위치와 일치 | 불량만 | S2~S5 |
-| `L_loc` | 결함 위치 segmentation (warmup) | 불량만 | S4~S5 |
-| `L_guide` | Attention이 결함 위치와 일치 | 불량만 | S3~S5 |
-| `L_cf` | 결함 제거 시 양품 예측 | 불량만 | S5 |
-| `L_consist` | Attention ≈ Localization | 불량만 | S4~S5 |
+| `L_cls` | 양품/불량 분류 | 전체 | S1~S6 |
+| `L_am` | Attended features도 분류 | 전체 | S3~S6 |
+| `L_cam_guide` | Weight-based CAM이 결함 위치와 일치 | 불량만 | S2~S6 |
+| `L_loc` | 결함 위치 segmentation (warmup) | 불량만 | S4~S6 |
+| `L_guide` | Attention이 결함 위치와 일치 | mask 있는 불량만 | S3~S6 |
+| `L_cf` | 결함 제거 시 양품 예측 | 불량만 | S5~S6 |
+| `L_consist` | Attention ≈ Localization | 불량만 | S4~S6 |
 
 ## 평가 지표
 
