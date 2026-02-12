@@ -561,10 +561,15 @@ class GAINMTLLoss(nn.Module):
 
         # ============ 5. Guided Attention Loss (attention module) ============
         if self.lambda_guide > 0:
+            # Strategy 6 (external attention): supervise *internal* attention with GT mask,
+            # only for samples that actually have a mask (non-zero defect_mask).
+            # Other strategies: use blended attention_map with has_defect filter as before.
+            guide_attn_key = 'attention_map_internal' if 'attention_map_internal' in outputs else 'attention_map'
+            has_mask = has_defect & (defect_mask.flatten(1).sum(1) > 0)
             attention_losses = self.attention_guidance_loss(
-                outputs['attention_map'],
+                outputs[guide_attn_key],
                 defect_mask,
-                has_defect,
+                has_mask,
             )
             for key, value in attention_losses.items():
                 losses[f'guide_{key}'] = self.lambda_guide * value
