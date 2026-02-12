@@ -275,9 +275,13 @@ class GAINMTLModel(nn.Module):
             x: Input images (B, 3, H, W)
             defect_mask: Ground truth defect masks for counterfactual learning (B, 1, H, W)
             external_attention: External attention map to guide classification (B, 1, H, W).
-                When provided (Strategy 6), skips internal attention generation and
-                uses this map directly to weight features for attended classification.
                 Values should be in [0, 1] range (e.g., binary defect masks).
+                Behavior depends on mode:
+                - Training: replace mode — GT mask directly replaces internal attention
+                  for masked samples (non-zero), others fall back to internal.
+                - Inference: multiplicative fusion — external × internal with
+                  per-sample max normalization. Safer for deployment because
+                  internal attention suppresses false positives in normal samples.
             return_attention: Whether to return attention maps
 
         Returns:
@@ -315,25 +319,44 @@ class GAINMTLModel(nn.Module):
         combined_logits_int = (attention_logits_int + mined_attention_logits_int) / 2
 
         if external_attention is not None:
-            # Strategy 6: per-sample hybrid attention
-            # - Samples WITH mask (non-zero) → use external mask as attention
-            # - Samples WITHOUT mask (all-zero, e.g., normal or mask-less defect)
-            #   → fall back to internal attention
             attn_map_ext = F.interpolate(
                 external_attention, size=final_features.shape[2:],
                 mode='bilinear', align_corners=False,
             )
-            attended_features_ext = final_features * attn_map_ext
-            logits_ext = torch.logit(attn_map_ext.clamp(1e-6, 1 - 1e-6))
 
-            # Per-sample selection based on whether external mask has content
-            has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
-            has_ext = has_ext.view(-1, 1, 1, 1)  # (B, 1, 1, 1) for broadcasting
+            if self.training:
+                # Training: replace mode
+                # GT mask is ground truth, so directly use it as attention for masked samples.
+                # Samples WITHOUT mask fall back to internal attention.
+                attended_features_ext = final_features * attn_map_ext
+                logits_ext = torch.logit(attn_map_ext.clamp(1e-6, 1 - 1e-6))
 
-            attended_features = torch.where(has_ext, attended_features_ext, attended_features_int)
-            combined_attention_logits = torch.where(has_ext, logits_ext, combined_logits_int)
-            attention_logits = torch.where(has_ext, logits_ext, attention_logits_int)
-            mined_attention_logits = torch.where(has_ext, logits_ext, mined_attention_logits_int)
+                has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
+                has_ext = has_ext.view(-1, 1, 1, 1)
+
+                attended_features = torch.where(has_ext, attended_features_ext, attended_features_int)
+                combined_attention_logits = torch.where(has_ext, logits_ext, combined_logits_int)
+                attention_logits = torch.where(has_ext, logits_ext, attention_logits_int)
+                mined_attention_logits = torch.where(has_ext, logits_ext, mined_attention_logits_int)
+            else:
+                # Inference: multiplicative fusion (external × internal)
+                # Safer than replace because:
+                # - Normal: internal attention is low → suppresses external false positives
+                # - Defect: both agree on defect region → reinforces correct attention
+                internal_prob = torch.sigmoid(combined_logits_int)
+                fused_attention = attn_map_ext * internal_prob
+
+                # Per-sample max normalization to maintain consistent scale with training
+                # (during training, replace mode uses binary masks with max=1)
+                max_vals = fused_attention.flatten(1).max(dim=1).values
+                max_vals = max_vals.clamp(min=1e-6).view(-1, 1, 1, 1)
+                fused_attention = fused_attention / max_vals
+
+                attended_features = final_features * fused_attention
+                fused_logits = torch.logit(fused_attention.clamp(1e-6, 1 - 1e-6))
+                combined_attention_logits = fused_logits
+                attention_logits = fused_logits
+                mined_attention_logits = fused_logits
         else:
             attended_features = attended_features_int
             combined_attention_logits = combined_logits_int
@@ -411,7 +434,9 @@ class GAINMTLModel(nn.Module):
 
         Strategy 1-2: cls_logits + cam_prob (attention module not trained)
         Strategy 3-5: attended_cls_logits + attention_map_prob (attention module trained)
-        Strategy 6:   attended_cls_logits + external attention map (mask-guided)
+        Strategy 6:   attended_cls_logits + attention_map_prob
+                      (training: GT mask replaces internal attention,
+                       inference: external × internal multiplicative fusion)
         """
         if strategy_id <= 2:
             self._use_attended_cls = False
@@ -436,8 +461,9 @@ class GAINMTLModel(nn.Module):
         Get CAM/attention map for visualization.
 
         Returns the appropriate probability map based on strategy
-        (cam_prob for Strategy 1-2, attention_map_prob for Strategy 3-5,
-         external attention for Strategy 6).
+        (cam_prob for Strategy 1-2, attention_map_prob for Strategy 3+).
+        For Strategy 6 with external_attention, returns fused map
+        (external × internal with per-sample max normalization).
 
         Args:
             x: Input images (B, 3, H, W)
@@ -472,12 +498,14 @@ class GAINMTLModel(nn.Module):
 
         Classification and CAM source depend on strategy (set via set_strategy()):
         - Strategy 1-2: cls_logits + cam_prob
-        - Strategy 3-5: attended_cls_logits + attention_map_prob
-        - Strategy 6:   attended_cls_logits + external attention map
+        - Strategy 3+:  attended_cls_logits + attention_map_prob
+        For Strategy 6 with external_attention, attention is fused
+        (external × internal) for safer inference.
 
         Args:
             x: Input images (B, 3, H, W)
-            external_attention: External attention map for Strategy 6 (B, 1, H, W)
+            external_attention: External attention map (B, 1, H, W), fused with
+                internal attention via multiplication at inference
             threshold: Threshold for CAM-based defect detection
 
         Returns:
@@ -512,10 +540,12 @@ class GAINMTLModel(nn.Module):
         Generate comprehensive explanation for prediction.
 
         Classification and CAM source depend on strategy (set via set_strategy()).
+        For Strategy 6 with external_attention, uses multiplicative fusion.
 
         Args:
             x: Input image (1, 3, H, W) - single image
-            external_attention: External attention map for Strategy 6 (1, 1, H, W)
+            external_attention: External attention map (1, 1, H, W), fused with
+                internal attention via multiplication at inference
 
         Returns:
             Dictionary with all explanation components
