@@ -322,7 +322,9 @@ class GAINMTLTrainer:
 
             # Forward pass with optional AMP
             with autocast(enabled=self.config.use_amp):
-                outputs = self.model(images, defect_mask=defect_masks)
+                # Strategy 6: pass defect_mask as external attention
+                ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
+                outputs = self.model(images, defect_mask=defect_masks, external_attention=ext_attn)
 
                 targets = {
                     'label': labels,
@@ -429,8 +431,9 @@ class GAINMTLTrainer:
             defect_masks = batch['defect_mask'].to(self.device)
             has_defect = batch['has_defect'].to(self.device)
 
-            # Forward pass
-            outputs = self.model(images)
+            # Forward pass (Strategy 6: pass defect_mask as external attention)
+            ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
+            outputs = self.model(images, external_attention=ext_attn)
 
             targets = {
                 'label': labels,
@@ -446,8 +449,9 @@ class GAINMTLTrainer:
                     total_losses[key] = []
                 total_losses[key].append(value.item())
 
-            # Classification predictions
-            preds = outputs['cls_logits'].argmax(dim=1)
+            # Classification predictions (strategy-dependent)
+            cls_key = 'attended_cls_logits' if getattr(self.model, '_use_attended_cls', False) else 'cls_logits'
+            preds = outputs[cls_key].argmax(dim=1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 

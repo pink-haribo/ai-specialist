@@ -121,9 +121,11 @@ class GAINMTLModel(nn.Module):
 
         # Inference config (set via set_strategy() based on training strategy)
         # Strategy 1-2: use cls_logits + cam_prob
-        # Strategy 3+:  use attended_cls_logits + attention_map_prob
+        # Strategy 3-5: use attended_cls_logits + attention_map_prob
+        # Strategy 6:   use attended_cls_logits + external attention map
         self._use_attended_cls = True
         self._cam_prob_key = 'attention_map_prob'
+        self._use_external_attention = False
 
         # ============ Backbone (mmpretrain EfficientNetV2) ============
         # Mmpretrain's EfficientNetV2 has block stages + a conv_head projection
@@ -263,6 +265,7 @@ class GAINMTLModel(nn.Module):
         self,
         x: torch.Tensor,
         defect_mask: Optional[torch.Tensor] = None,
+        external_attention: Optional[torch.Tensor] = None,
         return_attention: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -271,6 +274,10 @@ class GAINMTLModel(nn.Module):
         Args:
             x: Input images (B, 3, H, W)
             defect_mask: Ground truth defect masks for counterfactual learning (B, 1, H, W)
+            external_attention: External attention map to guide classification (B, 1, H, W).
+                When provided (Strategy 6), skips internal attention generation and
+                uses this map directly to weight features for attended classification.
+                Values should be in [0, 1] range (e.g., binary defect masks).
             return_attention: Whether to return attention maps
 
         Returns:
@@ -300,17 +307,30 @@ class GAINMTLModel(nn.Module):
         fpn_fused = self.fpn.get_fused_features(fpn_features_in)
 
         # ============ GAIN Attention ============
-        # Generate attention logits through guided attention module
-        # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
-        attended_features, attention_logits = self.attention_module(
-            final_features, return_attention=True
-        )
+        if external_attention is not None:
+            # Strategy 6: Use external attention map (e.g., defect mask) directly
+            # Resize to match feature map spatial resolution
+            attn_map = F.interpolate(
+                external_attention, size=final_features.shape[2:],
+                mode='bilinear', align_corners=False,
+            )
+            attended_features = final_features * attn_map
+            # Convert probability map to logits for output compatibility
+            combined_attention_logits = torch.logit(attn_map.clamp(1e-6, 1 - 1e-6))
+            attention_logits = combined_attention_logits
+            mined_attention_logits = combined_attention_logits
+        else:
+            # Strategy 1-5: Generate attention internally
+            # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
+            attended_features, attention_logits = self.attention_module(
+                final_features, return_attention=True
+            )
 
-        # Also generate attention logits through mining head (for comparison/ensemble)
-        mined_attention_logits = self.attention_mining_head(final_features)
+            # Also generate attention logits through mining head (for comparison/ensemble)
+            mined_attention_logits = self.attention_mining_head(final_features)
 
-        # Combine attention logits (optional: use learned weights)
-        combined_attention_logits = (attention_logits + mined_attention_logits) / 2
+            # Combine attention logits (optional: use learned weights)
+            combined_attention_logits = (attention_logits + mined_attention_logits) / 2
 
         # ============ Classification ============
         # Stream 1: Full features classification
@@ -379,35 +399,45 @@ class GAINMTLModel(nn.Module):
         Configure inference behavior based on training strategy.
 
         Strategy 1-2: cls_logits + cam_prob (attention module not trained)
-        Strategy 3+:  attended_cls_logits + attention_map_prob (attention module trained)
+        Strategy 3-5: attended_cls_logits + attention_map_prob (attention module trained)
+        Strategy 6:   attended_cls_logits + external attention map (mask-guided)
         """
         if strategy_id <= 2:
             self._use_attended_cls = False
             self._cam_prob_key = 'cam_prob'
-        else:
+            self._use_external_attention = False
+        elif strategy_id <= 5:
             self._use_attended_cls = True
             self._cam_prob_key = 'attention_map_prob'
+            self._use_external_attention = False
+        elif strategy_id == 6:
+            self._use_attended_cls = True
+            self._cam_prob_key = 'attention_map_prob'
+            self._use_external_attention = True
 
     def get_attention_map(
         self,
         x: torch.Tensor,
+        external_attention: Optional[torch.Tensor] = None,
         upsample: bool = True,
     ) -> torch.Tensor:
         """
         Get CAM/attention map for visualization.
 
         Returns the appropriate probability map based on strategy
-        (cam_prob for Strategy 1-2, attention_map_prob for Strategy 3+).
+        (cam_prob for Strategy 1-2, attention_map_prob for Strategy 3-5,
+         external attention for Strategy 6).
 
         Args:
             x: Input images (B, 3, H, W)
+            external_attention: External attention map for Strategy 6 (B, 1, H, W)
             upsample: Whether to upsample to input resolution
 
         Returns:
             CAM probability tensor [0, 1]
         """
         with torch.no_grad():
-            outputs = self.forward(x)
+            outputs = self.forward(x, external_attention=external_attention)
             cam = outputs[self._cam_prob_key]
 
             if upsample:
@@ -423,6 +453,7 @@ class GAINMTLModel(nn.Module):
     def predict(
         self,
         x: torch.Tensor,
+        external_attention: Optional[torch.Tensor] = None,
         threshold: float = 0.5,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -430,17 +461,19 @@ class GAINMTLModel(nn.Module):
 
         Classification and CAM source depend on strategy (set via set_strategy()):
         - Strategy 1-2: cls_logits + cam_prob
-        - Strategy 3+:  attended_cls_logits + attention_map_prob
+        - Strategy 3-5: attended_cls_logits + attention_map_prob
+        - Strategy 6:   attended_cls_logits + external attention map
 
         Args:
             x: Input images (B, 3, H, W)
+            external_attention: External attention map for Strategy 6 (B, 1, H, W)
             threshold: Threshold for CAM-based defect detection
 
         Returns:
             Dictionary with predictions and confidence
         """
         with torch.no_grad():
-            outputs = self.forward(x)
+            outputs = self.forward(x, external_attention=external_attention)
 
             # Classification prediction (strategy-dependent)
             cls_key = 'attended_cls_logits' if self._use_attended_cls else 'cls_logits'
@@ -462,6 +495,7 @@ class GAINMTLModel(nn.Module):
     def get_explanation(
         self,
         x: torch.Tensor,
+        external_attention: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """
         Generate comprehensive explanation for prediction.
@@ -470,6 +504,7 @@ class GAINMTLModel(nn.Module):
 
         Args:
             x: Input image (1, 3, H, W) - single image
+            external_attention: External attention map for Strategy 6 (1, 1, H, W)
 
         Returns:
             Dictionary with all explanation components
@@ -477,7 +512,7 @@ class GAINMTLModel(nn.Module):
         assert x.size(0) == 1, "Explanation works with single image"
 
         with torch.no_grad():
-            outputs = self.forward(x)
+            outputs = self.forward(x, external_attention=external_attention)
 
             # CAM: use strategy-appropriate prob map, upsample to input resolution
             input_size = x.shape[2:]

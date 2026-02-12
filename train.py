@@ -129,6 +129,19 @@ STRATEGY_CONFIGS = {
         },
         'loc_warmup_ratio': 0.5,
     },
+    6: {
+        'name': 'external_attention_guided',
+        'description': 'Attention-guided classification using external mask (defect mask as attention)',
+        'weights': {
+            'lambda_cls': 1.0,
+            'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,
+            'lambda_loc': 0.0,
+            'lambda_guide': 0.0,
+            'lambda_cf': 0.0,
+            'lambda_consist': 0.0,
+        },
+    },
 }
 
 
@@ -141,8 +154,8 @@ def parse_args():
 
     # Strategy selection
     parser.add_argument('--strategies', type=int, nargs='+', default=[1, 2, 3, 4, 5],
-                        choices=[1, 2, 3, 4, 5],
-                        help='Which strategies to train (1-5). Default: all')
+                        choices=[1, 2, 3, 4, 5, 6],
+                        help='Which strategies to train (1-6). Default: 1-5')
 
     # Override config options
     parser.add_argument('--data_root', type=str, default=None,
