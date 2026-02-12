@@ -411,6 +411,11 @@ forward() 출력:
 ### Strategy 6: GT Mask Attention
 
 Strategy 5의 모든 loss를 유지하면서, **GT defect mask가 있는 샘플은 mask를 직접 attention으로 사용**합니다.
+학습과 추론에서 external attention 처리 방식이 다릅니다.
+
+#### 학습 (Replace 모드)
+
+GT mask는 ground truth이므로 internal attention을 **대체**합니다.
 
 ```
 배치 내 샘플별 자동 분기:
@@ -420,7 +425,20 @@ Strategy 5의 모든 loss를 유지하면서, **GT defect mask가 있는 샘플�
   normal ────────────→ 내부 attention × features ──→ feature_adapter ──→ attended_cls
 ```
 
-- **GT mask → feature adapter**: mask가 있으면 모델이 정확한 결함 영역만 보고 분류
+#### 추론 (Multiplicative Fusion 모드)
+
+External attention과 internal attention을 **곱**하여 안전하게 합성합니다.
+
+```
+모든 샘플:  external × internal → max normalize → × features → feature_adapter → attended_cls
+```
+
+- **Normal 안전성**: internal attention이 낮으므로 external의 false positive을 자연 억제
+- **Defect 정확성**: 둘 다 동의하는 영역만 활성화 → false positive 감소
+- **Per-sample max normalization**: 곱 연산 후 값 범위를 [0, 1]로 복원하여 학습 시 분포와 일관성 유지
+
+#### 공통
+
 - **Guide loss (내부 attention vs GT mask)**: mask가 있는 샘플로 attention module을 supervision하여, mask 없는 샘플에서도 좋은 attention 생성
 - mask 유무에 관계없이 내부 attention module은 항상 학습됨
 
