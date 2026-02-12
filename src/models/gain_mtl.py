@@ -307,30 +307,38 @@ class GAINMTLModel(nn.Module):
         fpn_fused = self.fpn.get_fused_features(fpn_features_in)
 
         # ============ GAIN Attention ============
+        # Always generate internal attention (needed as fallback for mask-less samples)
+        attended_features_int, attention_logits_int = self.attention_module(
+            final_features, return_attention=True
+        )
+        mined_attention_logits_int = self.attention_mining_head(final_features)
+        combined_logits_int = (attention_logits_int + mined_attention_logits_int) / 2
+
         if external_attention is not None:
-            # Strategy 6: Use external attention map (e.g., defect mask) directly
-            # Resize to match feature map spatial resolution
-            attn_map = F.interpolate(
+            # Strategy 6: per-sample hybrid attention
+            # - Samples WITH mask (non-zero) → use external mask as attention
+            # - Samples WITHOUT mask (all-zero, e.g., normal or mask-less defect)
+            #   → fall back to internal attention
+            attn_map_ext = F.interpolate(
                 external_attention, size=final_features.shape[2:],
                 mode='bilinear', align_corners=False,
             )
-            attended_features = final_features * attn_map
-            # Convert probability map to logits for output compatibility
-            combined_attention_logits = torch.logit(attn_map.clamp(1e-6, 1 - 1e-6))
-            attention_logits = combined_attention_logits
-            mined_attention_logits = combined_attention_logits
+            attended_features_ext = final_features * attn_map_ext
+            logits_ext = torch.logit(attn_map_ext.clamp(1e-6, 1 - 1e-6))
+
+            # Per-sample selection based on whether external mask has content
+            has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
+            has_ext = has_ext.view(-1, 1, 1, 1)  # (B, 1, 1, 1) for broadcasting
+
+            attended_features = torch.where(has_ext, attended_features_ext, attended_features_int)
+            combined_attention_logits = torch.where(has_ext, logits_ext, combined_logits_int)
+            attention_logits = torch.where(has_ext, logits_ext, attention_logits_int)
+            mined_attention_logits = torch.where(has_ext, logits_ext, mined_attention_logits_int)
         else:
-            # Strategy 1-5: Generate attention internally
-            # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
-            attended_features, attention_logits = self.attention_module(
-                final_features, return_attention=True
-            )
-
-            # Also generate attention logits through mining head (for comparison/ensemble)
-            mined_attention_logits = self.attention_mining_head(final_features)
-
-            # Combine attention logits (optional: use learned weights)
-            combined_attention_logits = (attention_logits + mined_attention_logits) / 2
+            attended_features = attended_features_int
+            combined_attention_logits = combined_logits_int
+            attention_logits = attention_logits_int
+            mined_attention_logits = mined_attention_logits_int
 
         # ============ Classification ============
         # Stream 1: Full features classification

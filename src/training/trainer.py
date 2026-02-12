@@ -323,16 +323,9 @@ class GAINMTLTrainer:
             # Forward pass with optional AMP
             with autocast(enabled=self.config.use_amp):
                 # Strategy 6: pass defect_mask as external attention
-                # For defect images without masks (all-zero), use all-ones
-                # so the model sees the full image (avoids conflicting signal
-                # where zero-attention + defect-label contradicts normal samples)
-                if getattr(self.model, '_use_external_attention', False):
-                    ext_attn = defect_masks.clone()
-                    mask_missing = has_defect & (defect_masks.sum(dim=[1, 2, 3]) == 0)
-                    if mask_missing.any():
-                        ext_attn[mask_missing] = 1.0
-                else:
-                    ext_attn = None
+                # Model handles per-sample hybrid: external mask where available,
+                # internal attention as fallback for mask-less samples
+                ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
                 outputs = self.model(images, defect_mask=defect_masks, external_attention=ext_attn)
 
                 targets = {
@@ -441,13 +434,7 @@ class GAINMTLTrainer:
             has_defect = batch['has_defect'].to(self.device)
 
             # Forward pass (Strategy 6: pass defect_mask as external attention)
-            if getattr(self.model, '_use_external_attention', False):
-                ext_attn = defect_masks.clone()
-                mask_missing = has_defect & (defect_masks.sum(dim=[1, 2, 3]) == 0)
-                if mask_missing.any():
-                    ext_attn[mask_missing] = 1.0
-            else:
-                ext_attn = None
+            ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
             outputs = self.model(images, external_attention=ext_attn)
 
             targets = {
