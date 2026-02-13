@@ -9,8 +9,10 @@ General helper functions for:
 """
 
 import os
+import re
 import random
-from typing import Any, Dict, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -98,6 +100,62 @@ def save_config(config: Dict[str, Any], save_path: str):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
+
+
+def get_available_checkpoints(work_dir: str) -> List[Dict[str, Any]]:
+    """
+    Scan a checkpoint directory and return only epochs that have checkpoint files.
+
+    Looks for files matching ``checkpoint_epoch_{N}.pth`` as well as special
+    checkpoints like ``best_model.pth``, ``last_model.pth``, and
+    ``final_model.pth``.
+
+    Args:
+        work_dir: Path to the strategy directory containing checkpoint files.
+
+    Returns:
+        Sorted list of dicts with keys ``label`` (display string) and ``path``
+        (absolute file path).  Epoch-based entries are sorted numerically;
+        special checkpoints (best / last / final) come first.
+    """
+    work_dir = Path(work_dir)
+    if not work_dir.is_dir():
+        return []
+
+    special_names = {
+        'best_model.pth': 'best',
+        'last_model.pth': 'last',
+        'final_model.pth': 'final',
+    }
+    epoch_pattern = re.compile(r'^checkpoint_epoch_(\d+)\.pth$')
+
+    special: List[Dict[str, Any]] = []
+    epochs: List[Tuple[int, Dict[str, Any]]] = []
+
+    for f in work_dir.iterdir():
+        if not f.is_file() or not f.suffix == '.pth':
+            continue
+
+        name = f.name
+        if name in special_names:
+            special.append({
+                'label': special_names[name],
+                'path': str(f),
+            })
+        else:
+            m = epoch_pattern.match(name)
+            if m:
+                epoch_num = int(m.group(1))
+                epochs.append((epoch_num, {
+                    'label': f'epoch {epoch_num}',
+                    'path': str(f),
+                }))
+
+    # Sort: special first (best → last → final), then epochs ascending
+    special.sort(key=lambda x: list(special_names.values()).index(x['label']))
+    epochs.sort(key=lambda x: x[0])
+
+    return special + [e[1] for e in epochs]
 
 
 class AverageMeter:

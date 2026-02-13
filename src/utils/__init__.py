@@ -7,6 +7,7 @@ from .helpers import (
     load_config,
     save_config,
     print_model_summary,
+    get_available_checkpoints,
     AverageMeter,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "load_config",
     "save_config",
     "print_model_summary",
+    "get_available_checkpoints",
     "AverageMeter",
 ]
