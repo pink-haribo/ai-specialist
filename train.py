@@ -131,17 +131,22 @@ STRATEGY_CONFIGS = {
     },
     6: {
         'name': 'full_with_gt_mask_attention',
-        'description': 'Strategy 5 (full) + GT mask injection into feature adapter when available',
+        'description': 'Strategy 5 (full) + GT mask multiplicative fusion with curriculum',
         'weights': {
             'lambda_cls': 1.0,
             'lambda_am': 0.5,
             'lambda_cam_guide': 0.3,
             'lambda_loc': 0.2,
-            'lambda_guide': 0.5,
+            'lambda_guide': 1.0,   # Stronger guide loss for better internal attention
             'lambda_cf': 0.3,
             'lambda_consist': 0.2,
         },
         'loc_warmup_ratio': 0.5,
+        # Curriculum: blend alpha decays from start→end over first ratio of training
+        # alpha=0.5: 50% GT replace + 50% fusion; alpha=0.0: pure fusion (matches inference)
+        'ext_attn_alpha_start': 0.5,
+        'ext_attn_alpha_end': 0.0,
+        'ext_attn_alpha_ratio': 0.7,  # Decay over first 70% of epochs
     },
 }
 
@@ -364,11 +369,20 @@ def train_single_strategy(
     target_lambda_loc = strategy['weights']['lambda_loc']
     if loc_warmup_ratio > 0 and target_lambda_loc > 0:
         loc_warmup_epochs = int(num_epochs * loc_warmup_ratio)
-        print(f'Localization warmup: lambda_loc 0.0 → {target_lambda_loc} over {loc_warmup_epochs} epochs\n')
+        print(f'Localization warmup: lambda_loc 0.0 → {target_lambda_loc} over {loc_warmup_epochs} epochs')
     else:
         loc_warmup_epochs = 0
 
-    print(f'Starting training for {num_epochs} epochs...\n')
+    # External attention alpha curriculum (Strategy 6)
+    ext_attn_alpha_start = strategy.get('ext_attn_alpha_start', 0.0)
+    ext_attn_alpha_end = strategy.get('ext_attn_alpha_end', 0.0)
+    ext_attn_alpha_ratio = strategy.get('ext_attn_alpha_ratio', 0.7)
+    use_alpha_schedule = ext_attn_alpha_start > 0 and hasattr(model, 'set_external_attention_alpha')
+    if use_alpha_schedule:
+        alpha_decay_epochs = int(num_epochs * ext_attn_alpha_ratio)
+        print(f'External attention alpha: {ext_attn_alpha_start} → {ext_attn_alpha_end} over {alpha_decay_epochs} epochs')
+
+    print(f'\nStarting training for {num_epochs} epochs...\n')
 
     for epoch in range(num_epochs):
         # Gradual localization warmup: linearly increase lambda_loc
@@ -378,6 +392,16 @@ def train_single_strategy(
             else:
                 warmup_loc = target_lambda_loc
             criterion.update_weights(lambda_loc=warmup_loc)
+
+        # External attention alpha curriculum (Strategy 6):
+        # Decays blend alpha from start→end so the model transitions
+        # from GT-guided attention to pure multiplicative fusion
+        if use_alpha_schedule:
+            if epoch < alpha_decay_epochs:
+                alpha = ext_attn_alpha_start + (ext_attn_alpha_end - ext_attn_alpha_start) * (epoch / alpha_decay_epochs)
+            else:
+                alpha = ext_attn_alpha_end
+            model.set_external_attention_alpha(alpha)
 
         # Train
         train_losses = trainer.train_epoch(train_loader, epoch)
