@@ -137,7 +137,7 @@ STRATEGY_CONFIGS = {
             'lambda_am': 0.5,
             'lambda_cam_guide': 0.3,
             'lambda_loc': 0.2,
-            'lambda_guide': 1.0,   # Stronger guide loss for better internal attention
+            'lambda_guide': 0.5,
             'lambda_cf': 0.3,
             'lambda_consist': 0.2,
         },
