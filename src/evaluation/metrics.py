@@ -404,6 +404,11 @@ def evaluate_model(
     all_has_defect = []
     all_image_paths = []
 
+    # Detect strategy-specific model configuration
+    use_ext_attn = getattr(model, '_use_external_attention', False)
+    use_attended_cls = getattr(model, '_use_attended_cls', False)
+    cls_key = 'attended_cls_logits' if use_attended_cls else 'cls_logits'
+
     with torch.no_grad():
         for batch in dataloader:
             images = batch['image'].to(device)
@@ -412,10 +417,12 @@ def evaluate_model(
             has_defect = batch['has_defect'].to(device)
             image_paths = batch.get('image_path', [None] * len(images))
 
-            outputs = model(images)
+            # Strategy 6: pass defect masks as external attention
+            ext_attn = defect_masks if use_ext_attn else None
+            outputs = model(images, external_attention=ext_attn)
 
-            # Classification
-            probs = F.softmax(outputs['cls_logits'], dim=1)
+            # Classification (strategy-appropriate: attended for 3+, basic for 1-2)
+            probs = F.softmax(outputs[cls_key], dim=1)
             preds = probs.argmax(dim=1)
 
             all_predictions.extend(preds.cpu().numpy())

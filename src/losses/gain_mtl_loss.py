@@ -594,8 +594,12 @@ class GAINMTLLoss(nn.Module):
 
         # ============ 8. Consistency Loss ============
         # Attention map and localization map should be consistent for defective samples
+        # Use internal attention when available (Strategy 6) to avoid comparing
+        # detached GT logits with localization output — internal attention provides
+        # meaningful gradients for both the attention module and localization head.
         if self.lambda_consist > 0 and has_defect.sum() > 0:
-            attention_map = outputs['attention_map']
+            consist_attn_key = 'attention_map_internal' if 'attention_map_internal' in outputs else 'attention_map'
+            attention_map = outputs[consist_attn_key]
             loc_map = outputs['localization_map']
 
             # Resize to same size

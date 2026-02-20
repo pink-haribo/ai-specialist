@@ -127,6 +127,11 @@ class GAINMTLModel(nn.Module):
         self._cam_prob_key = 'attention_map_prob'
         self._use_external_attention = False
 
+        # Strategy 6 curriculum: blend ratio between GT replace and multiplicative fusion
+        # 1.0 = pure GT replace (old behavior), 0.0 = pure multiplicative fusion
+        # Decays during training so the model transitions from GT-guided to self-reliant
+        self._ext_attn_blend_alpha = 0.0
+
         # ============ Backbone (mmpretrain EfficientNetV2) ============
         # Mmpretrain's EfficientNetV2 has block stages + a conv_head projection
         # layer (1x1 Conv + BN + SiLU) as the final layer. For example:
@@ -276,12 +281,11 @@ class GAINMTLModel(nn.Module):
             defect_mask: Ground truth defect masks for counterfactual learning (B, 1, H, W)
             external_attention: External attention map to guide classification (B, 1, H, W).
                 Values should be in [0, 1] range (e.g., binary defect masks).
-                Behavior depends on mode:
-                - Training: replace mode — GT mask directly replaces internal attention
-                  for masked samples (non-zero), others fall back to internal.
-                - Inference: multiplicative fusion — external × internal with
-                  per-sample max normalization. Safer for deployment because
-                  internal attention suppresses false positives in normal samples.
+                Uses unified multiplicative fusion for both training and inference:
+                - Samples WITH external mask: fused = external × internal (normalized)
+                - Samples WITHOUT external mask: falls back to internal attention
+                During early training, optional curriculum alpha blending mixes in
+                GT replace signal (controlled by set_external_attention_alpha()).
             return_attention: Whether to return attention maps
 
         Returns:
@@ -324,39 +328,41 @@ class GAINMTLModel(nn.Module):
                 mode='bilinear', align_corners=False,
             )
 
-            if self.training:
-                # Training: replace mode
-                # GT mask is ground truth, so directly use it as attention for masked samples.
-                # Samples WITHOUT mask fall back to internal attention.
-                attended_features_ext = final_features * attn_map_ext
-                logits_ext = torch.logit(attn_map_ext.clamp(1e-6, 1 - 1e-6))
+            # Determine which samples have external attention (non-zero mask)
+            has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
+            has_ext = has_ext.view(-1, 1, 1, 1)
 
-                has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
-                has_ext = has_ext.view(-1, 1, 1, 1)
+            # Multiplicative fusion: external × internal (unified for train & inference)
+            # - Samples WITH external mask: fused = ext * internal (normalized)
+            # - Samples WITHOUT external mask: fall back to internal attention
+            # This eliminates the train/inference distribution mismatch that caused
+            # the attended_classification_head to see different input distributions.
+            internal_prob = torch.sigmoid(combined_logits_int)
+            fused_attention = attn_map_ext * internal_prob
 
-                attended_features = torch.where(has_ext, attended_features_ext, attended_features_int)
-                combined_attention_logits = torch.where(has_ext, logits_ext, combined_logits_int)
-                attention_logits = torch.where(has_ext, logits_ext, attention_logits_int)
-                mined_attention_logits = torch.where(has_ext, logits_ext, mined_attention_logits_int)
+            # Per-sample max normalization (only meaningful for samples with ext mask)
+            max_vals = fused_attention.flatten(1).max(dim=1).values
+            max_vals = max_vals.clamp(min=1e-6).view(-1, 1, 1, 1)
+            fused_norm = fused_attention / max_vals
+
+            # Curriculum alpha blending (training only):
+            # Early training: blend in GT replace signal to bootstrap learning
+            # Late training: pure fusion (matches inference distribution)
+            if self.training and self._ext_attn_blend_alpha > 0:
+                blended = (
+                    self._ext_attn_blend_alpha * attn_map_ext
+                    + (1 - self._ext_attn_blend_alpha) * fused_norm
+                )
+                effective_attention = torch.where(has_ext, blended, internal_prob)
             else:
-                # Inference: multiplicative fusion (external × internal)
-                # Safer than replace because:
-                # - Normal: internal attention is low → suppresses external false positives
-                # - Defect: both agree on defect region → reinforces correct attention
-                internal_prob = torch.sigmoid(combined_logits_int)
-                fused_attention = attn_map_ext * internal_prob
+                # Pure multiplicative fusion with fallback for normal samples
+                effective_attention = torch.where(has_ext, fused_norm, internal_prob)
 
-                # Per-sample max normalization to maintain consistent scale with training
-                # (during training, replace mode uses binary masks with max=1)
-                max_vals = fused_attention.flatten(1).max(dim=1).values
-                max_vals = max_vals.clamp(min=1e-6).view(-1, 1, 1, 1)
-                fused_attention = fused_attention / max_vals
-
-                attended_features = final_features * fused_attention
-                fused_logits = torch.logit(fused_attention.clamp(1e-6, 1 - 1e-6))
-                combined_attention_logits = fused_logits
-                attention_logits = fused_logits
-                mined_attention_logits = fused_logits
+            attended_features = final_features * effective_attention
+            fused_logits = torch.logit(effective_attention.clamp(1e-6, 1 - 1e-6))
+            combined_attention_logits = fused_logits
+            attention_logits = fused_logits
+            mined_attention_logits = fused_logits
         else:
             attended_features = attended_features_int
             combined_attention_logits = combined_logits_int
@@ -428,6 +434,22 @@ class GAINMTLModel(nn.Module):
 
         return outputs
 
+    def set_external_attention_alpha(self, alpha: float) -> None:
+        """
+        Set the curriculum blend alpha for external attention (Strategy 6).
+
+        Controls the blend between GT replace and multiplicative fusion during training:
+        - alpha=1.0: pure GT replace (old behavior, causes train/inference mismatch)
+        - alpha=0.0: pure multiplicative fusion (matches inference distribution)
+        - 0 < alpha < 1: linear blend for curriculum transition
+
+        Recommended schedule: start ~0.5, decay to 0.0 over 60-70% of training.
+
+        Args:
+            alpha: Blend ratio in [0.0, 1.0]
+        """
+        self._ext_attn_blend_alpha = max(0.0, min(1.0, alpha))
+
     def set_strategy(self, strategy_id: int) -> None:
         """
         Configure inference behavior based on training strategy.
@@ -435,8 +457,8 @@ class GAINMTLModel(nn.Module):
         Strategy 1-2: cls_logits + cam_prob (attention module not trained)
         Strategy 3-5: attended_cls_logits + attention_map_prob (attention module trained)
         Strategy 6:   attended_cls_logits + attention_map_prob
-                      (training: GT mask replaces internal attention,
-                       inference: external × internal multiplicative fusion)
+                      (unified multiplicative fusion for both train and inference,
+                       with curriculum alpha blending during early training)
         """
         if strategy_id <= 2:
             self._use_attended_cls = False
