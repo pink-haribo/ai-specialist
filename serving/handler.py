@@ -78,7 +78,13 @@ class GAINMTLHandler(BaseHandler):
         """
         Load the GAIN-MTL model and configuration.
 
-        Called once when the model is first loaded by TorchServe.
+        Configuration priority (highest → lowest):
+        1. Checkpoint metadata (model_config, strategy embedded during training)
+        2. Handler config file (serving/config.json or configs/default.yaml)
+        3. Hardcoded defaults
+
+        This ensures the model architecture always matches the checkpoint weights,
+        even when config.json is outdated or missing.
 
         Args:
             context: TorchServe context object containing model metadata
@@ -91,22 +97,6 @@ class GAINMTLHandler(BaseHandler):
             sys.path.insert(0, model_dir)
 
         from src.models import GAINMTLModel
-
-        # ---- Load handler config (serving/config.json bundled as extra-file) ----
-        handler_config = self._load_handler_config(model_dir)
-
-        model_config = handler_config.get("model", {})
-        self.image_size = tuple(handler_config.get("image_size", [512, 512]))
-        self.strategy = handler_config.get("strategy", 5)
-        if self.strategy not in (1, 2, 3, 4, 5, 6):
-            raise ValueError(
-                f"Invalid strategy: {self.strategy}. Must be 1-6."
-            )
-        self.threshold = handler_config.get("threshold", 0.5)
-        self.return_cam = handler_config.get("return_cam", True)
-        class_names = handler_config.get("class_names")
-        if class_names:
-            self.CLASS_NAMES = class_names
 
         # ---- Device ----
         self.device = torch.device(
@@ -121,6 +111,49 @@ class GAINMTLHandler(BaseHandler):
 
         logger.info("Device: %s", self.device)
 
+        # ---- Load checkpoint (read metadata before building model) ----
+        checkpoint_path = self._find_checkpoint(model_dir)
+        if checkpoint_path is None:
+            raise FileNotFoundError(
+                f"No checkpoint (.pth/.pt) found in model_dir: {model_dir}"
+            )
+
+        logger.info("Loading checkpoint: %s", checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+
+        # ---- Resolve config: checkpoint metadata > config file > defaults ----
+        handler_config = self._load_handler_config(model_dir)
+        file_model_config = handler_config.get("model", {})
+
+        # model_config: checkpoint wins over config file
+        if "model_config" in checkpoint:
+            model_config = checkpoint["model_config"]
+            logger.info("Using model_config from checkpoint")
+        else:
+            model_config = file_model_config
+            logger.info("Using model_config from config file (not found in checkpoint)")
+
+        # strategy: checkpoint wins over config file
+        if "strategy" in checkpoint:
+            self.strategy = checkpoint["strategy"]
+            logger.info("Using strategy=%d from checkpoint", self.strategy)
+        else:
+            self.strategy = handler_config.get("strategy", 5)
+            logger.info("Using strategy=%d from config file", self.strategy)
+
+        if self.strategy not in (1, 2, 3, 4, 5, 6):
+            raise ValueError(
+                f"Invalid strategy: {self.strategy}. Must be 1-6."
+            )
+
+        # Remaining settings come from config file only (not training-dependent)
+        self.image_size = tuple(handler_config.get("image_size", [512, 512]))
+        self.threshold = handler_config.get("threshold", 0.5)
+        self.return_cam = handler_config.get("return_cam", True)
+        class_names = handler_config.get("class_names")
+        if class_names:
+            self.CLASS_NAMES = class_names
+
         # ---- Build model ----
         self.model = GAINMTLModel(
             backbone_arch=model_config.get("backbone_arch", "s"),
@@ -133,15 +166,6 @@ class GAINMTLHandler(BaseHandler):
         )
 
         # ---- Load weights ----
-        checkpoint_path = self._find_checkpoint(model_dir)
-        if checkpoint_path is None:
-            raise FileNotFoundError(
-                f"No checkpoint (.pth/.pt) found in model_dir: {model_dir}"
-            )
-
-        logger.info("Loading checkpoint: %s", checkpoint_path)
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-
         if "model_state_dict" in checkpoint:
             self.model.load_state_dict(checkpoint["model_state_dict"])
             epoch = checkpoint.get("epoch", "unknown")

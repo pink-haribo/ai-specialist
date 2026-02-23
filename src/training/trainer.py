@@ -534,8 +534,20 @@ class GAINMTLTrainer:
         path: str,
         epoch: int,
         metrics: Dict[str, float],
+        model_config: Optional[Dict[str, Any]] = None,
+        strategy: Optional[int] = None,
     ):
-        """Save model checkpoint."""
+        """Save model checkpoint.
+
+        Args:
+            path: File path to save the checkpoint.
+            epoch: Current epoch number.
+            metrics: Validation metrics at the time of saving.
+            model_config: Model architecture config (backbone_arch, num_classes,
+                etc.). Embedded so that serving can reconstruct the model without
+                a separate config file.
+            strategy: Training strategy ID (1-6).
+        """
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         checkpoint = {
@@ -548,6 +560,11 @@ class GAINMTLTrainer:
             'global_step': self.global_step,
             'best_metric': self.best_metric,
         }
+
+        if model_config is not None:
+            checkpoint['model_config'] = model_config
+        if strategy is not None:
+            checkpoint['strategy'] = strategy
 
         if self.scaler is not None:
             checkpoint['scaler_state_dict'] = self.scaler.state_dict()

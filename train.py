@@ -426,7 +426,9 @@ def train_single_strategy(
                 trainer.save_checkpoint(
                     str(exp_dir / 'best_model.pth'),
                     epoch,
-                    val_metrics
+                    val_metrics,
+                    model_config=config['model'],
+                    strategy=strategy_id,
                 )
 
         # Update scheduler
@@ -437,7 +439,9 @@ def train_single_strategy(
     trainer.save_checkpoint(
         str(exp_dir / 'last_model.pth'),
         num_epochs - 1,
-        val_metrics
+        val_metrics,
+        model_config=config['model'],
+        strategy=strategy_id,
     )
 
     # Final evaluation on test set
