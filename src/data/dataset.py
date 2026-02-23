@@ -622,6 +622,11 @@ def create_dataloaders(
             image_size=image_size
         )
 
+    # persistent_workers keeps worker processes alive between epochs,
+    # avoiding the overhead of re-spawning them each epoch.
+    # Only valid when num_workers > 0.
+    persistent = num_workers > 0
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -629,6 +634,7 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,
+        persistent_workers=persistent,
     )
 
     val_loader = DataLoader(
@@ -637,6 +643,7 @@ def create_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent,
     )
 
     test_loader = DataLoader(
@@ -645,6 +652,7 @@ def create_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent,
     )
 
     return train_loader, val_loader, test_loader
