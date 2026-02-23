@@ -94,7 +94,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 0.3,
             'lambda_am': 1.0,
-            'lambda_cam_guide': 1.0,
+            'lambda_cam_guide': 0.3,
             'lambda_loc': 0.0,
             'lambda_guide': 0.5,
             'lambda_cf': 0.0,
@@ -107,7 +107,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 0.3,
             'lambda_am': 1.0,
-            'lambda_cam_guide': 1.0,
+            'lambda_cam_guide': 0.3,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
             'lambda_cf': 0.0,
@@ -121,7 +121,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 0.3,
             'lambda_am': 1.0,
-            'lambda_cam_guide': 1.0,
+            'lambda_cam_guide': 0.3,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
             'lambda_cf': 0.3,
@@ -135,7 +135,7 @@ STRATEGY_CONFIGS = {
         'weights': {
             'lambda_cls': 0.3,
             'lambda_am': 1.0,
-            'lambda_cam_guide': 1.0,
+            'lambda_cam_guide': 0.3,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
             'lambda_cf': 0.3,
