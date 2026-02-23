@@ -98,6 +98,10 @@ class GAINMTLHandler(BaseHandler):
         model_config = handler_config.get("model", {})
         self.image_size = tuple(handler_config.get("image_size", [512, 512]))
         self.strategy = handler_config.get("strategy", 5)
+        if self.strategy not in (1, 2, 3, 4, 5, 6):
+            raise ValueError(
+                f"Invalid strategy: {self.strategy}. Must be 1-6."
+            )
         self.threshold = handler_config.get("threshold", 0.5)
         self.return_cam = handler_config.get("return_cam", True)
         class_names = handler_config.get("class_names")
