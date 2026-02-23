@@ -186,6 +186,11 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed')
 
+    # Loss function
+    parser.add_argument('--loss_function', type=str, default=None,
+                        choices=['focal', 'ce'],
+                        help='Classification loss function: focal (Focal Loss) or ce (Cross Entropy). Default: focal')
+
     # Logging
     parser.add_argument('--wandb', action='store_true',
                         help='Enable W&B logging')
@@ -222,6 +227,7 @@ def create_criterion(config: dict, strategy_weights: dict) -> GAINMTLLoss:
         lambda_consist=strategy_weights['lambda_consist'],
         focal_gamma=config['loss']['focal_gamma'],
         focal_alpha=config['loss']['focal_alpha'],
+        loss_function=config['loss'].get('loss_function', 'focal'),
     )
 
 
@@ -498,6 +504,8 @@ def main():
         config['data']['val_ratio'] = args.val_ratio
     if args.wandb:
         config['logging']['use_wandb'] = True
+    if args.loss_function:
+        config['loss']['loss_function'] = args.loss_function
     if args.no_tensorboard:
         config['logging']['use_tensorboard'] = False
 

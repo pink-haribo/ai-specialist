@@ -444,6 +444,7 @@ class GAINMTLLoss(nn.Module):
         lambda_consist: Weight for consistency loss
         focal_gamma: Gamma parameter for focal loss
         focal_alpha: Alpha parameter for focal loss
+        loss_function: Classification loss type ('focal' or 'ce')
     """
 
     def __init__(
@@ -457,6 +458,7 @@ class GAINMTLLoss(nn.Module):
         lambda_consist: float = 0.2,
         focal_gamma: float = 2.0,
         focal_alpha: float = 0.25,
+        loss_function: str = 'focal',
     ):
         super().__init__()
 
@@ -469,8 +471,12 @@ class GAINMTLLoss(nn.Module):
         self.lambda_cf = lambda_cf
         self.lambda_consist = lambda_consist
 
-        # Component losses
-        self.focal_loss = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
+        # Classification loss
+        self.loss_function = loss_function
+        if loss_function == 'ce':
+            self.cls_loss_fn = nn.CrossEntropyLoss()
+        else:
+            self.cls_loss_fn = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
         self.dice_loss = DiceLoss()
         self.cam_guidance_loss = CAMGuidanceLoss()
         self.attention_guidance_loss = AttentionGuidanceLoss()
@@ -508,11 +514,11 @@ class GAINMTLLoss(nn.Module):
         has_defect = targets['has_defect']
 
         # ============ 1. Classification Loss ============
-        cls_loss = self.focal_loss(outputs['cls_logits'], labels)
+        cls_loss = self.cls_loss_fn(outputs['cls_logits'], labels)
         losses['cls'] = self.lambda_cls * cls_loss
 
         # ============ 2. Attention Mining Loss (GAIN S_am) ============
-        am_loss = self.focal_loss(outputs['attended_cls_logits'], labels)
+        am_loss = self.cls_loss_fn(outputs['attended_cls_logits'], labels)
         losses['am'] = self.lambda_am * am_loss
 
         # ============ 3. CAM Guidance Loss (Strategy 2) ============
@@ -670,4 +676,5 @@ def build_loss(config: Dict) -> GAINMTLLoss:
         lambda_consist=config.get('lambda_consist', 0.2),
         focal_gamma=config.get('focal_gamma', 2.0),
         focal_alpha=config.get('focal_alpha', 0.25),
+        loss_function=config.get('loss_function', 'focal'),
     )
