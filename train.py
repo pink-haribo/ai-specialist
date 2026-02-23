@@ -93,7 +93,7 @@ STRATEGY_CONFIGS = {
         'description': 'Classification + Attention Mining + CAM Guidance',
         'weights': {
             'lambda_cls': 0.3,
-            'lambda_am': 0.5,
+            'lambda_am': 1.0,
             'lambda_cam_guide': 1.0,
             'lambda_loc': 0.0,
             'lambda_guide': 0.5,
@@ -106,7 +106,7 @@ STRATEGY_CONFIGS = {
         'description': 'Classification + Attention Mining + Localization + CAM Guidance',
         'weights': {
             'lambda_cls': 0.3,
-            'lambda_am': 0.5,
+            'lambda_am': 1.0,
             'lambda_cam_guide': 1.0,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
@@ -120,7 +120,7 @@ STRATEGY_CONFIGS = {
         'description': 'Full training with all losses (including Counterfactual + CAM Guidance)',
         'weights': {
             'lambda_cls': 0.3,
-            'lambda_am': 0.5,
+            'lambda_am': 1.0,
             'lambda_cam_guide': 1.0,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
@@ -134,7 +134,7 @@ STRATEGY_CONFIGS = {
         'description': 'Strategy 5 (full) + GT mask multiplicative fusion with curriculum',
         'weights': {
             'lambda_cls': 0.3,
-            'lambda_am': 0.5,
+            'lambda_am': 1.0,
             'lambda_cam_guide': 1.0,
             'lambda_loc': 0.2,
             'lambda_guide': 0.5,
