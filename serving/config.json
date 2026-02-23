@@ -1,0 +1,15 @@
+{
+    "model": {
+        "backbone_arch": "s",
+        "num_classes": 2,
+        "fpn_channels": 256,
+        "attention_channels": 512,
+        "use_counterfactual": true,
+        "freeze_backbone_stages": -1
+    },
+    "image_size": [512, 512],
+    "strategy": 5,
+    "threshold": 0.5,
+    "return_cam": true,
+    "class_names": ["normal", "defective"]
+}
