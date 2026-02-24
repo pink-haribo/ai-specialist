@@ -12,9 +12,15 @@ Trains 5 separate models, each with a different loss strategy:
 This allows direct comparison of each strategy's performance.
 
 Usage:
+    # Fresh training
     python train.py --config configs/default.yaml
     python train.py --config configs/default.yaml --strategies 1 2 3 4 5
     python train.py --config configs/default.yaml --strategies 5  # Train only strategy 5
+
+    # Resume training from experiment directory
+    python train.py --resume checkpoints/strategy_comparison_s_20240224_123456/
+    python train.py --resume checkpoints/strategy_comparison_s_20240224_123456/ --strategies 5
+    python train.py --resume checkpoints/strategy_comparison_s_20240224_123456/ --epochs 200
 
 Backbone options (mmpretrain):
     b0  - EfficientNetV2-B0
@@ -191,6 +197,11 @@ def parse_args():
                         choices=['focal', 'ce'],
                         help='Classification loss function: focal (Focal Loss) or ce (Cross Entropy). Default: focal')
 
+    # Resume training
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Resume training from experiment directory '
+                             '(e.g., checkpoints/strategy_comparison_s_20240224_123456/)')
+
     # Logging
     parser.add_argument('--wandb', action='store_true',
                         help='Enable W&B logging')
@@ -275,6 +286,7 @@ def train_single_strategy(
     device: torch.device,
     base_exp_dir: Path,
     logger=None,
+    resume_checkpoint: str = None,
 ) -> Dict:
     """
     Train a single model with a specific strategy.
@@ -369,6 +381,21 @@ def train_single_strategy(
     # Training loop
     num_epochs = config['training']['num_epochs']
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': [], 'val_cam_iou': []}
+    start_epoch = 0
+
+    # Resume from checkpoint if provided
+    if resume_checkpoint:
+        ckpt = torch.load(resume_checkpoint, map_location=device, weights_only=False)
+        start_epoch = ckpt['epoch'] + 1
+        saved_history = ckpt.get('history', None)
+        if saved_history:
+            history = saved_history
+        trainer.load_checkpoint(resume_checkpoint)
+        print(f'\n*** Resumed from epoch {ckpt["epoch"]}, continuing from epoch {start_epoch} ***')
+        print(f'    Best metric so far: {trainer.best_metric:.4f}')
+        if start_epoch >= num_epochs:
+            print(f'    Training already complete ({start_epoch}/{num_epochs} epochs).')
+            print(f'    Use --epochs to extend training if needed.')
 
     # Localization warmup config
     loc_warmup_ratio = strategy.get('loc_warmup_ratio', 0.0)
@@ -388,9 +415,14 @@ def train_single_strategy(
         alpha_decay_epochs = int(num_epochs * ext_attn_alpha_ratio)
         print(f'External attention alpha: {ext_attn_alpha_start} → {ext_attn_alpha_end} over {alpha_decay_epochs} epochs')
 
-    print(f'\nStarting training for {num_epochs} epochs...\n')
+    if start_epoch > 0:
+        print(f'\nResuming training from epoch {start_epoch} to {num_epochs - 1}...\n')
+    else:
+        print(f'\nStarting training for {num_epochs} epochs...\n')
 
-    for epoch in range(num_epochs):
+    val_metrics = {}
+
+    for epoch in range(start_epoch, num_epochs):
         # Gradual localization warmup: linearly increase lambda_loc
         if loc_warmup_epochs > 0:
             if epoch < loc_warmup_epochs:
@@ -429,21 +461,36 @@ def train_single_strategy(
             # Save best model
             if val_metrics['accuracy'] > trainer.best_metric:
                 trainer.best_metric = val_metrics['accuracy']
+                extra = {'strategy_id': strategy_id, 'history': history}
                 trainer.save_checkpoint(
                     str(exp_dir / 'best_model.pth'),
                     epoch,
-                    val_metrics
+                    val_metrics,
+                    extra_data=extra,
                 )
+
+        # Save periodic checkpoint for resume
+        save_interval = config['checkpoint']['save_interval']
+        if save_interval > 0 and (epoch + 1) % save_interval == 0:
+            extra = {'strategy_id': strategy_id, 'history': history}
+            trainer.save_checkpoint(
+                str(exp_dir / 'last_model.pth'),
+                epoch,
+                val_metrics,
+                extra_data=extra,
+            )
 
         # Update scheduler
         if scheduler is not None:
             scheduler.step()
 
     # Save last model
+    extra = {'strategy_id': strategy_id, 'history': history}
     trainer.save_checkpoint(
         str(exp_dir / 'last_model.pth'),
         num_epochs - 1,
-        val_metrics
+        val_metrics,
+        extra_data=extra,
     )
 
     # Final evaluation on test set
@@ -479,13 +526,8 @@ def train_single_strategy(
     return results
 
 
-def main():
-    args = parse_args()
-
-    # Load config
-    config = load_config(args.config)
-
-    # Override config with command line arguments
+def _apply_cli_overrides(args, config):
+    """Apply command line argument overrides to config."""
     if args.data_root:
         config['data']['data_root'] = args.data_root
     if args.backbone:
@@ -509,15 +551,101 @@ def main():
     if args.no_tensorboard:
         config['logging']['use_tensorboard'] = False
 
-    # Experiment name
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    arch = config['model']['backbone_arch']
-    if args.name:
-        exp_name = f"{args.name}_{timestamp}"
-    else:
-        exp_name = f"strategy_comparison_{arch}_{timestamp}"
 
-    config['experiment']['name'] = exp_name
+def _detect_resume_state(resume_dir: Path) -> Dict:
+    """
+    Detect which strategies are completed/in-progress/pending in an experiment directory.
+
+    Returns:
+        Dictionary with keys:
+          - completed: {strategy_id: results_dict, ...}
+          - resumable: {strategy_id: checkpoint_path, ...}
+          - pending: [strategy_id, ...]
+    """
+    completed = {}
+    resumable = {}
+    pending = []
+
+    for strategy_id, strategy_info in STRATEGY_CONFIGS.items():
+        strategy_dir = resume_dir / f'strategy_{strategy_id}_{strategy_info["name"]}'
+
+        if not strategy_dir.exists():
+            pending.append(strategy_id)
+            continue
+
+        results_file = strategy_dir / 'results.json'
+        if results_file.exists():
+            with open(results_file) as f:
+                completed[strategy_id] = json.load(f)
+        elif (strategy_dir / 'last_model.pth').exists():
+            resumable[strategy_id] = str(strategy_dir / 'last_model.pth')
+        elif (strategy_dir / 'best_model.pth').exists():
+            resumable[strategy_id] = str(strategy_dir / 'best_model.pth')
+        else:
+            pending.append(strategy_id)
+
+    return {'completed': completed, 'resumable': resumable, 'pending': pending}
+
+
+def main():
+    args = parse_args()
+
+    # ============ Resume Mode ============
+    if args.resume:
+        resume_dir = Path(args.resume)
+        if not resume_dir.is_dir():
+            print(f'Error: {args.resume} is not a directory.')
+            print(f'Usage: python train.py --resume checkpoints/<experiment_dir>/')
+            sys.exit(1)
+
+        config_path = resume_dir / 'config.yaml'
+        if not config_path.exists():
+            print(f'Error: config.yaml not found in {resume_dir}')
+            sys.exit(1)
+
+        # Load original config and apply CLI overrides
+        config = load_config(str(config_path))
+        _apply_cli_overrides(args, config)
+
+        # Use original experiment directory
+        base_exp_dir = resume_dir
+        exp_name = config['experiment']['name']
+
+        print('\n' + '=' * 70)
+        print(f'RESUMING EXPERIMENT: {exp_name}')
+        print(f'Directory: {base_exp_dir}')
+        print('=' * 70)
+
+        # Detect state of each strategy
+        state = _detect_resume_state(resume_dir)
+
+        if state['completed']:
+            print(f'\nCompleted strategies: {sorted(state["completed"].keys())}')
+        if state['resumable']:
+            print(f'Resumable strategies: {sorted(state["resumable"].keys())}')
+        if state['pending']:
+            print(f'Pending strategies:   {state["pending"]}')
+
+    else:
+        # ============ Fresh Training Mode ============
+        config = load_config(args.config)
+        _apply_cli_overrides(args, config)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        arch = config['model']['backbone_arch']
+        if args.name:
+            exp_name = f"{args.name}_{timestamp}"
+        else:
+            exp_name = f"strategy_comparison_{arch}_{timestamp}"
+
+        config['experiment']['name'] = exp_name
+        base_exp_dir = Path(config['checkpoint']['checkpoint_dir']) / exp_name
+        base_exp_dir.mkdir(parents=True, exist_ok=True)
+
+        save_config(config, str(base_exp_dir / 'config.yaml'))
+        print(f'Base experiment directory: {base_exp_dir}')
+
+        state = {'completed': {}, 'resumable': {}, 'pending': list(STRATEGY_CONFIGS.keys())}
 
     # Set seed
     set_seed(config['experiment']['seed'])
@@ -525,14 +653,6 @@ def main():
     # Device
     device = get_device(config['experiment'].get('device'))
     print(f'\nUsing device: {device}')
-
-    # Create base output directory
-    base_exp_dir = Path(config['checkpoint']['checkpoint_dir']) / exp_name
-    base_exp_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save base config
-    save_config(config, str(base_exp_dir / 'config.yaml'))
-    print(f'Base experiment directory: {base_exp_dir}')
 
     # ============ Create Data Loaders ============
     print('\n' + '=' * 60)
@@ -574,58 +694,83 @@ def main():
     strategies_to_train = sorted(args.strategies)
     all_results = {}
 
-    print('\n' + '=' * 70)
-    print(f'TRAINING {len(strategies_to_train)} STRATEGIES: {strategies_to_train}')
-    print('=' * 70)
+    # Pre-load results for already-completed strategies
+    for sid, prev_results in state['completed'].items():
+        if sid in strategies_to_train:
+            all_results[sid] = prev_results
 
-    for strategy_id in strategies_to_train:
-        results = train_single_strategy(
-            strategy_id=strategy_id,
-            config=config,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
-            device=device,
-            base_exp_dir=base_exp_dir,
-            logger=logger,
-        )
-        all_results[strategy_id] = results
+    # Determine which strategies actually need work
+    strategies_to_run = [
+        sid for sid in strategies_to_train
+        if sid not in state['completed']
+    ]
+
+    if not strategies_to_run:
+        print('\nAll requested strategies are already completed!')
+    else:
+        print('\n' + '=' * 70)
+        skipped = [sid for sid in strategies_to_train if sid in state['completed']]
+        if skipped:
+            print(f'SKIPPING COMPLETED STRATEGIES: {skipped}')
+        print(f'TRAINING STRATEGIES: {strategies_to_run}')
+        print('=' * 70)
+
+        for strategy_id in strategies_to_run:
+            resume_ckpt = state['resumable'].get(strategy_id, None)
+            if resume_ckpt:
+                print(f'\n>> Resuming strategy {strategy_id} from checkpoint: {resume_ckpt}')
+
+            results = train_single_strategy(
+                strategy_id=strategy_id,
+                config=config,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=test_loader,
+                device=device,
+                base_exp_dir=base_exp_dir,
+                logger=logger,
+                resume_checkpoint=resume_ckpt,
+            )
+            all_results[strategy_id] = results
 
     # ============ Summary Comparison ============
-    print('\n' + '=' * 70)
-    print('STRATEGY COMPARISON SUMMARY')
-    print('=' * 70)
+    # Only show summary if we have results
+    trained_strategies = [sid for sid in strategies_to_train if sid in all_results]
+    if trained_strategies:
+        print('\n' + '=' * 70)
+        print('STRATEGY COMPARISON SUMMARY')
+        print('=' * 70)
 
-    print(f'\n{"Strategy":<40} {"Val Acc":<12} {"Test Acc":<12} {"CAM-IoU":<12}')
-    print('-' * 76)
+        print(f'\n{"Strategy":<40} {"Val Acc":<12} {"Test Acc":<12} {"CAM-IoU":<12}')
+        print('-' * 76)
 
-    for strategy_id in strategies_to_train:
-        results = all_results[strategy_id]
-        strategy_name = STRATEGY_CONFIGS[strategy_id]['name']
-        val_acc = results['best_val_accuracy']
-        test_acc = results['test_metrics'].get('accuracy', 0)
-        cam_iou = results['test_metrics'].get('cam_iou', 0)
+        for strategy_id in trained_strategies:
+            results = all_results[strategy_id]
+            strategy_name = STRATEGY_CONFIGS[strategy_id]['name']
+            val_acc = results['best_val_accuracy']
+            test_acc = results['test_metrics'].get('accuracy', 0)
+            cam_iou = results['test_metrics'].get('cam_iou', 0)
 
-        print(f'{strategy_id}. {strategy_name:<36} {val_acc:<12.4f} {test_acc:<12.4f} {cam_iou:<12.4f}')
+            print(f'{strategy_id}. {strategy_name:<36} {val_acc:<12.4f} {test_acc:<12.4f} {cam_iou:<12.4f}')
 
-    # Save comparison summary
-    summary = {
-        'experiment_name': exp_name,
-        'strategies_trained': strategies_to_train,
-        'results': {str(k): v for k, v in all_results.items()},
-        'comparison': {
-            str(sid): {
-                'strategy_name': STRATEGY_CONFIGS[sid]['name'],
-                'best_val_accuracy': all_results[sid]['best_val_accuracy'],
-                'test_accuracy': all_results[sid]['test_metrics'].get('accuracy', 0),
-                'test_cam_iou': all_results[sid]['test_metrics'].get('cam_iou', 0),
+        # Save comparison summary
+        summary = {
+            'experiment_name': exp_name,
+            'strategies_trained': trained_strategies,
+            'results': {str(k): v for k, v in all_results.items()},
+            'comparison': {
+                str(sid): {
+                    'strategy_name': STRATEGY_CONFIGS[sid]['name'],
+                    'best_val_accuracy': all_results[sid]['best_val_accuracy'],
+                    'test_accuracy': all_results[sid]['test_metrics'].get('accuracy', 0),
+                    'test_cam_iou': all_results[sid]['test_metrics'].get('cam_iou', 0),
+                }
+                for sid in trained_strategies
             }
-            for sid in strategies_to_train
         }
-    }
 
-    with open(base_exp_dir / 'comparison_summary.json', 'w') as f:
-        json.dump(summary, f, indent=2)
+        with open(base_exp_dir / 'comparison_summary.json', 'w') as f:
+            json.dump(summary, f, indent=2)
 
     print(f'\nAll training complete!')
     print(f'Results saved to: {base_exp_dir}')

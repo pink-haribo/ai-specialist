@@ -534,8 +534,16 @@ class GAINMTLTrainer:
         path: str,
         epoch: int,
         metrics: Dict[str, float],
+        extra_data: Optional[Dict[str, Any]] = None,
     ):
-        """Save model checkpoint."""
+        """Save model checkpoint.
+
+        Args:
+            path: Path to save checkpoint
+            epoch: Current epoch number
+            metrics: Validation metrics
+            extra_data: Additional data to include (e.g., history, strategy_id)
+        """
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         checkpoint = {
@@ -551,6 +559,9 @@ class GAINMTLTrainer:
 
         if self.scaler is not None:
             checkpoint['scaler_state_dict'] = self.scaler.state_dict()
+
+        if extra_data is not None:
+            checkpoint.update(extra_data)
 
         torch.save(checkpoint, path)
         print(f'Checkpoint saved to {path}')
