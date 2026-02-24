@@ -311,7 +311,6 @@ class GAINMTLModel(nn.Module):
         final_features = all_features[-1]      # conv_head output → classification/CAM
 
         # ============ FPN Processing ============
-        fpn_features = self.fpn(fpn_features_in)
         fpn_fused = self.fpn.get_fused_features(fpn_features_in)
 
         # ============ GAIN Attention ============
