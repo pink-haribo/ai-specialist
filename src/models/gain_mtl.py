@@ -454,22 +454,25 @@ class GAINMTLModel(nn.Module):
         Configure inference behavior based on training strategy.
 
         Strategy 1-2: cls_logits + cam_prob (attention module not trained)
-        Strategy 3-5: attended_cls_logits + attention_map_prob (attention module trained)
-        Strategy 6:   attended_cls_logits + attention_map_prob
-                      (unified multiplicative fusion for both train and inference,
-                       with curriculum alpha blending during early training)
+        Strategy 3:   attended_cls_logits + attention_map_prob (attention module trained)
+        Strategy 4-5: attended_cls_logits + localization_map_prob (FPN-based, full resolution)
+        Strategy 6:   attended_cls_logits + localization_map_prob + external attention
         """
         if strategy_id <= 2:
             self._use_attended_cls = False
             self._cam_prob_key = 'cam_prob'
             self._use_external_attention = False
-        elif strategy_id <= 5:
+        elif strategy_id <= 3:
             self._use_attended_cls = True
             self._cam_prob_key = 'attention_map_prob'
             self._use_external_attention = False
+        elif strategy_id <= 5:
+            self._use_attended_cls = True
+            self._cam_prob_key = 'localization_map_prob'
+            self._use_external_attention = False
         elif strategy_id == 6:
             self._use_attended_cls = True
-            self._cam_prob_key = 'attention_map_prob'
+            self._cam_prob_key = 'localization_map_prob'
             self._use_external_attention = True
 
     def get_attention_map(
