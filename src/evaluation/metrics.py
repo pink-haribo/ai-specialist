@@ -417,7 +417,7 @@ def evaluate_model(
             has_defect = batch['has_defect'].to(device)
             image_paths = batch.get('image_path', [None] * len(images))
 
-            # Strategy 6: pass defect masks as external attention
+            # Strategy 6, 8: pass defect masks as external attention
             ext_attn = defect_masks if use_ext_attn else None
             outputs = model(images, external_attention=ext_attn)
 

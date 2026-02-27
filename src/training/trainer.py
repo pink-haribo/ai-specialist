@@ -322,7 +322,7 @@ class GAINMTLTrainer:
 
             # Forward pass with optional AMP
             with autocast(enabled=self.config.use_amp):
-                # Strategy 6: pass defect_mask as external attention
+                # Strategy 6, 8: pass defect_mask as external attention
                 # Model handles per-sample hybrid: external mask where available,
                 # internal attention as fallback for mask-less samples
                 ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
@@ -433,7 +433,7 @@ class GAINMTLTrainer:
             defect_masks = batch['defect_mask'].to(self.device)
             has_defect = batch['has_defect'].to(self.device)
 
-            # Forward pass (Strategy 6: pass defect_mask as external attention)
+            # Forward pass (Strategy 6, 8: pass defect_mask as external attention)
             ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
             outputs = self.model(images, external_attention=ext_attn)
 
