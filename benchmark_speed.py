@@ -95,7 +95,7 @@ def parse_args():
                         help='Number of warmup iterations before timing (default: 5)')
     parser.add_argument('--device', type=str, default=None,
                         help='Device to use (default: auto-detect)')
-    parser.add_argument('--strategy', type=int, default=None, choices=[1, 2, 3, 4, 5, 6],
+    parser.add_argument('--strategy', type=int, default=None, choices=[1, 2, 3, 4, 5, 6, 7, 8],
                         help='Training strategy (auto-detected from checkpoint if not specified)')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for inference (default: 1 for per-image timing)')

@@ -62,9 +62,9 @@ def parse_args():
                         help='Device to use')
 
     # Strategy (determines which outputs to use for classification and CAM)
-    parser.add_argument('--strategy', type=int, default=3, choices=[1, 2, 3, 4, 5, 6],
-                        help='Training strategy (1-2: cls_logits+cam, 3-5: attended_cls_logits+attention_map, '
-                             '6: attended_cls_logits+attention_map with external attention fusion)')
+    parser.add_argument('--strategy', type=int, default=3, choices=[1, 2, 3, 4, 5, 6, 7, 8],
+                        help='Training strategy (1-2: cls_logits+cam, 3-5,7: attended_cls_logits+attention_map, '
+                             '6,8: attended_cls_logits+attention_map with external attention fusion)')
 
     # Output options
     parser.add_argument('--export_results', type=str, default=None,

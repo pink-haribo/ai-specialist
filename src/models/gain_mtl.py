@@ -121,13 +121,13 @@ class GAINMTLModel(nn.Module):
 
         # Inference config (set via set_strategy() based on training strategy)
         # Strategy 1-2: use cls_logits + cam_prob
-        # Strategy 3-5: use attended_cls_logits + attention_map_prob
-        # Strategy 6:   use attended_cls_logits + external attention map
+        # Strategy 3-5, 7: use attended_cls_logits + attention_map_prob
+        # Strategy 6, 8:   use attended_cls_logits + external attention map
         self._use_attended_cls = True
         self._cam_prob_key = 'attention_map_prob'
         self._use_external_attention = False
 
-        # Strategy 6 curriculum: blend ratio between GT replace and multiplicative fusion
+        # Strategy 6/8 curriculum: blend ratio between GT replace and multiplicative fusion
         # 1.0 = pure GT replace (old behavior), 0.0 = pure multiplicative fusion
         # Decays during training so the model transitions from GT-guided to self-reliant
         self._ext_attn_blend_alpha = 0.0
@@ -454,20 +454,20 @@ class GAINMTLModel(nn.Module):
         Configure inference behavior based on training strategy.
 
         Strategy 1-2: cls_logits + cam_prob (attention module not trained)
-        Strategy 3-5: attended_cls_logits + attention_map_prob (attention module trained)
-        Strategy 6:   attended_cls_logits + attention_map_prob
-                      (unified multiplicative fusion for both train and inference,
-                       with curriculum alpha blending during early training)
+        Strategy 3-5, 7: attended_cls_logits + attention_map_prob (attention module trained)
+        Strategy 6, 8: attended_cls_logits + attention_map_prob
+                       (unified multiplicative fusion for both train and inference,
+                        with curriculum alpha blending during early training)
         """
         if strategy_id <= 2:
             self._use_attended_cls = False
             self._cam_prob_key = 'cam_prob'
             self._use_external_attention = False
-        elif strategy_id <= 5:
+        elif strategy_id in (3, 4, 5, 7):
             self._use_attended_cls = True
             self._cam_prob_key = 'attention_map_prob'
             self._use_external_attention = False
-        elif strategy_id == 6:
+        elif strategy_id in (6, 8):
             self._use_attended_cls = True
             self._cam_prob_key = 'attention_map_prob'
             self._use_external_attention = True

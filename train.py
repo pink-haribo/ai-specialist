@@ -63,6 +63,9 @@ from src.utils import set_seed, get_device, load_config, save_config, print_mode
 # - Strategy 3: Classification + Attention Mining
 # - Strategy 4: Classification + Attention Mining + Localization
 # - Strategy 5: Full (all losses including Counterfactual)
+# - Strategy 6: Strategy 5 + GT mask multiplicative fusion with curriculum
+# - Strategy 7: Strategy 3 + Counterfactual
+# - Strategy 8: Strategy 7 + GT mask blending curriculum
 #
 # Key difference between Strategy 2 and 3+:
 # - Strategy 2: Uses weight-based CAM directly from classifier (no extra module)
@@ -154,6 +157,37 @@ STRATEGY_CONFIGS = {
         'ext_attn_alpha_end': 0.0,
         'ext_attn_alpha_ratio': 0.7,  # Decay over first 70% of epochs
     },
+    7: {
+        'name': 'cls_attention_mining_cf',
+        'description': 'Strategy 3 (Attention Mining) + Counterfactual',
+        'weights': {
+            'lambda_cls': 0.5,
+            'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,
+            'lambda_loc': 0.0,
+            'lambda_guide': 1.5,
+            'lambda_cf': 0.3,
+            'lambda_consist': 0.0,
+        }
+    },
+    8: {
+        'name': 'cls_attention_mining_cf_mask_curriculum',
+        'description': 'Strategy 7 (Attention Mining + CF) + GT mask blending curriculum',
+        'weights': {
+            'lambda_cls': 0.5,
+            'lambda_am': 0.5,
+            'lambda_cam_guide': 0.0,
+            'lambda_loc': 0.0,
+            'lambda_guide': 1.5,
+            'lambda_cf': 0.3,
+            'lambda_consist': 0.0,
+        },
+        # Curriculum: blend alpha decays from start→end over first ratio of training
+        # alpha=0.5: 50% GT replace + 50% fusion; alpha=0.0: pure fusion (matches inference)
+        'ext_attn_alpha_start': 0.5,
+        'ext_attn_alpha_end': 0.0,
+        'ext_attn_alpha_ratio': 0.7,  # Decay over first 70% of epochs
+    },
 }
 
 
@@ -166,8 +200,8 @@ def parse_args():
 
     # Strategy selection
     parser.add_argument('--strategies', type=int, nargs='+', default=[1, 2, 3, 4, 5],
-                        choices=[1, 2, 3, 4, 5, 6],
-                        help='Which strategies to train (1-6). Default: 1-5')
+                        choices=[1, 2, 3, 4, 5, 6, 7, 8],
+                        help='Which strategies to train (1-8). Default: 1-5')
 
     # Override config options
     parser.add_argument('--data_root', type=str, default=None,
@@ -406,7 +440,7 @@ def train_single_strategy(
     else:
         loc_warmup_epochs = 0
 
-    # External attention alpha curriculum (Strategy 6)
+    # External attention alpha curriculum (Strategy 6, 8)
     ext_attn_alpha_start = strategy.get('ext_attn_alpha_start', 0.0)
     ext_attn_alpha_end = strategy.get('ext_attn_alpha_end', 0.0)
     ext_attn_alpha_ratio = strategy.get('ext_attn_alpha_ratio', 0.7)
@@ -431,7 +465,7 @@ def train_single_strategy(
                 warmup_loc = target_lambda_loc
             criterion.update_weights(lambda_loc=warmup_loc)
 
-        # External attention alpha curriculum (Strategy 6):
+        # External attention alpha curriculum (Strategy 6, 8):
         # Decays blend alpha from start→end so the model transitions
         # from GT-guided attention to pure multiplicative fusion
         if use_alpha_schedule:
