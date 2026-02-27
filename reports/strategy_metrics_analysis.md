@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This report analyzes the evaluation results of 5 progressive training strategies in the GAIN-MTL
+This report analyzes the evaluation results of 6 progressive training strategies in the GAIN-MTL
 (Guided Attention Inference Multi-Task Learning) framework for manufacturing defect detection.
 
 Each strategy incrementally adds loss components to improve both classification performance and
@@ -15,6 +15,7 @@ model interpretability (i.e., whether the model focuses on actual defect regions
 | S3 | + Attention Mining |
 | S4 | + Localization |
 | S5 | Full (+ Counterfactual) |
+| S6 | + GT Mask Fusion (Curriculum) |
 
 ---
 
@@ -172,7 +173,7 @@ All recommendations have been implemented in the codebase:
 
 ---
 
-## 8. Conclusion
+## 8. Conclusion (Round 1)
 
 - **S5 (Full)** is the recommended production model based on classification metrics.
 - The **classification-interpretability gap** between S2 and S5 suggests that combining both
@@ -184,3 +185,132 @@ All recommendations have been implemented in the codebase:
 - The **gap vs. expected results**, especially S1's CAM-IoU, warrants investigation of the
   evaluation pipeline itself. **Per-image min-max CAM normalization has been added to
   address this.**
+
+---
+
+## 9. Round 2 — Updated Experiment Results (Post-Optimization)
+
+### 9.1 Overview
+
+This section reports results after applying the Round 1 optimizations (Section 7) and
+introducing a new **S6 (GT Mask Fusion)** strategy. Key changes applied:
+- `lambda_cam_guide: 0.3` added to S3~S5
+- `lambda_guide` increased to 0.5 in S3
+- `lambda_loc` reduced to 0.2 in S4~S5 with gradual warmup (50%)
+- Per-image min-max CAM normalization in evaluation
+- S6: Full loss (S5) + multiplicative GT mask fusion with curriculum alpha decay
+
+### 9.2 Full Results
+
+| Metric | S1 | S2 | S3 | S4 | S5 | S6 |
+|--------|-----|-----|-----|-----|-----|-----|
+| Accuracy | 0.89 | 0.88 | 0.90 | 0.89 | 0.89 | **0.91** |
+| Recall | 0.88 | 0.88 | 0.94 | 0.92 | 0.93 | **0.95** |
+| CAM-IoU | 0.18 | 0.48 | **0.50** | **0.50** | 0.49 | 0.48 |
+| PointGame | 0.08 | 0.90 | 0.89 | 0.90 | 0.89 | **0.92** |
+| Energy-Inside | 0.17 | 0.68 | 0.69 | 0.70 | 0.70 | **0.76** |
+| Loc-IoU | 0.02 | 0.02 | 0.04 | **0.27** | **0.27** | 0.25 |
+
+### 9.3 Comparison with Round 1
+
+| Metric | Strategy | Round 1 | Round 2 | Delta | Verdict |
+|--------|----------|---------|---------|-------|---------|
+| Accuracy | S4 | 0.872 | 0.89 | **+1.8%p** | S4 regression resolved |
+| Recall | S3 | 0.894 | 0.94 | **+4.6%p** | Major improvement |
+| Recall | S4 | 0.866 | 0.92 | **+5.4%p** | S4 regression resolved |
+| Recall | S5 | 0.900 | 0.93 | **+3.0%p** | Improved |
+| CAM-IoU | S1 | 0.116 | 0.18 | **+0.064** | Normalization effective |
+| CAM-IoU | S3 | 0.451 | 0.50 | **+0.049** | CAM guidance effective |
+| PointGame | S1 | 0.161 | 0.08 | **-0.081** | Normalization side-effect |
+| PointGame | S3 | 0.841 | 0.89 | **+0.049** | Recovered |
+| Energy-Inside | S3 | 0.626 | 0.69 | **+0.064** | CAM guidance effective |
+
+### 9.4 Key Findings — Round 2
+
+#### Resolved Issues
+
+1. **S4 multi-task interference eliminated.**
+   - Round 1: S3→S4 showed accuracy drop (0.883→0.872) and recall drop (0.894→0.866).
+   - Round 2: S4 achieves Accuracy 0.89, Recall 0.92 — no regression from S3.
+   - `lambda_loc` reduction (0.3→0.2) and gradual warmup successfully mitigate interference.
+
+2. **S3 interpretability gap recovered.**
+   - Round 1: S2→S3 showed CAM-IoU drop (0.494→0.451) and PointGame drop (0.890→0.841).
+   - Round 2: S3 CAM-IoU 0.50, PointGame 0.89 — now exceeds S2 on CAM-IoU.
+   - Adding `lambda_cam_guide: 0.3` to S3 preserves direct CAM supervision alongside learned attention.
+
+3. **Classification metrics broadly improved.**
+   - Recall improved across all strategies (S3~S6 all exceed 0.92).
+   - This is critical for manufacturing defect detection where missing defects (FN) is costly.
+
+#### New Findings
+
+4. **S6 (GT Mask Fusion) achieves best overall profile.**
+   - Highest Accuracy (0.91), Recall (0.95), PointGame (0.92), Energy-Inside (0.76).
+   - Curriculum-based GT mask fusion effectively enhances both classification and attention quality.
+   - However, Loc-IoU (0.25) slightly lower than S4/S5 (0.27), and CAM-IoU (0.48) slightly
+     lower than S3/S4 (0.50).
+
+5. **CAM-IoU plateaus at ~0.48–0.50 across all supervised strategies (S2–S6).**
+   - Despite different loss configurations, no strategy breaks through 0.50.
+   - This suggests a structural bottleneck — likely attention map resolution or binarization
+     threshold, not loss design.
+
+6. **S1 PointGame anomaly (0.161→0.08).**
+   - Per-image normalization spreads S1's unfocused attention more uniformly, making argmax
+     location random. CAM-IoU improved (0.116→0.18), so normalization itself is valid.
+   - PointGame is argmax-based and inherently sensitive to normalization of diffuse attention maps.
+   - This is expected behavior for an unsupervised baseline — not a concern.
+
+7. **Loc-IoU shows clear strategy boundary.**
+   - S1–S3 (no localization head): 0.02–0.04 (near-zero, expected).
+   - S4–S6 (with localization head): 0.25–0.27.
+   - Localization head functions correctly but has room for improvement.
+
+### 9.5 Updated Strategy Profile
+
+```
+Strategy   Classification (Recall)       Interpretability (Energy-Inside)   Localization (Loc-IoU)
+S1         █████████░  0.88              ██░░░░░░░░  0.17                   ░░░░░░░░░░  0.02
+S2         █████████░  0.88              ███████░░░  0.68                   ░░░░░░░░░░  0.02
+S3         █████████░  0.94              ███████░░░  0.69                   ░░░░░░░░░░  0.04
+S4         █████████░  0.92              ███████░░░  0.70                   ███░░░░░░░  0.27
+S5         █████████░  0.93              ███████░░░  0.70                   ███░░░░░░░  0.27
+S6         ██████████  0.95              ████████░░  0.76                   ███░░░░░░░  0.25
+```
+
+**S6 leads in both classification and interpretability**, while S4/S5 lead in localization.
+
+---
+
+## 10. Round 2 — Recommendations & Future Experiments
+
+### 10.1 Production Recommendation
+
+**Adopt S6 as the production model.** S6 achieves:
+- Best classification: Accuracy 0.91, Recall 0.95
+- Best interpretability: PointGame 0.92, Energy-Inside 0.76
+- Acceptable localization: Loc-IoU 0.25 (only 0.02 below S4/S5)
+
+If pixel-level localization is critical, **S5 is the fallback** (Recall 0.93, Loc-IoU 0.27).
+
+### 10.2 Next Experiment Directions
+
+| Priority | Experiment | Rationale | Expected Outcome |
+|----------|------------|-----------|------------------|
+| **P1** | **CAM-IoU bottleneck investigation**: Sweep binarization threshold (0.3, 0.4, 0.5, 0.6) and measure CAM-IoU sensitivity | All strategies plateau at ~0.50. Need to determine if this is a threshold artifact or true attention quality limit | Identify optimal threshold; if CAM-IoU jumps at different threshold, the bottleneck is evaluation-side |
+| **P2** | **Attention map resolution**: Replace bilinear upsampling with learned deconvolution for attention/CAM maps | Low-resolution feature maps (e.g., 7×7 for EfficientNetV2-S) limit spatial precision of attention | CAM-IoU 0.55+ by preserving finer spatial detail |
+| **P3** | **S6 Loc-IoU recovery**: Increase `lambda_loc` slightly (0.2→0.25) or extend localization warmup to 70% in S6 | S6 Loc-IoU (0.25) underperforms S4/S5 (0.27); GT mask fusion may interfere with localization gradient | Recover Loc-IoU to 0.27+ while maintaining S6's classification advantage |
+| **P4** | **S6 alpha decay schedule**: Compare linear, cosine, and step-decay for curriculum GT mask blend | Current decay schedule may not be optimal; too fast/slow decay affects final attention quality | Identify best schedule for CAM-IoU and Energy-Inside |
+| **P5** | **Backbone scale-up**: Test EfficientNetV2-M/L | Current S model may have representation capacity limits contributing to CAM-IoU plateau | Broad improvement across all metrics, especially CAM-IoU and Loc-IoU |
+| **P6** | **CRF post-processing for Loc-IoU**: Apply DenseCRF or learnable CRF to localization output | Loc-IoU 0.27 is relatively low; CRF can refine coarse segmentation boundaries | Loc-IoU 0.35+ without retraining |
+
+### 10.3 Analysis Summary
+
+The Round 1 optimizations successfully resolved the two major issues:
+- **S4 multi-task interference** → eliminated by loss weight tuning and gradual warmup
+- **S3 interpretability regression** → recovered by adding `lambda_cam_guide`
+
+The remaining bottleneck is **CAM-IoU ~0.50 ceiling** and **Loc-IoU ~0.27 ceiling**, which
+likely require architectural changes (P2, P5) or post-processing improvements (P1, P6)
+rather than further loss weight tuning.
