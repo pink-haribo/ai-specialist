@@ -89,14 +89,14 @@
 - 학습 가능한 attention이 실제 결함 feature에 집중하도록 유도함으로써, 분류 성능과 해석 가능성을 동시에 향상시키는 효과가 확인된다.
 - **비용 대비 성능이 가장 우수한 Strategy**로, 3개의 loss만으로 높은 분류 성능을 달성했다.
 
-#### S7 — Attention Mining + Counterfactual (Lightweight)
+#### S7 — S3 + Counterfactual (Localization 미포함)
 
 | Metric | Value | vs S3 |
 |--------|-------|-------|
 | Accuracy | 0.896 | -0.006 |
 | Recall | 0.934 | -0.004 |
 
-- S3에 Counterfactual(`L_cf`)을 추가한 **경량화 Strategy**이다.
+- S3에 Counterfactual(`L_cf`)을 추가한 Strategy이다. 단, S6과 달리 **Localization 관련 loss(`L_loc`, `L_consist`)와 Localization head가 포함되지 않는다.**
 - Accuracy와 Recall이 S3 대비 각각 -0.006, -0.004 소폭 하락했다.
 - Counterfactual loss가 attention을 더 보수적(conservative)으로 만들어 **분류 성능에 약간의 trade-off**가 발생한 것으로 보인다.
 - 다만 하락 폭이 미미하여, Counterfactual이 분류에 미치는 부정적 영향은 제한적이다.
@@ -111,7 +111,7 @@
 - S7에 GT Mask Curriculum을 추가했으나, 분류 성능이 **추가 하락**했다.
 - Accuracy 0.887은 **전체 Strategy 중 최저**로, Baseline(S1) 수준까지 떨어졌다.
 - Localization loss 없이 GT mask curriculum만 적용한 것이 효과적이지 않았으며, 오히려 분류 학습에 간섭을 일으킨 것으로 분석된다.
-- **경량 모델(S7/S8)에서는 curriculum이 분류 성능 향상에 기여하지 못한다**는 점이 확인된다.
+- **Localization이 없는 S7/S8에서는 curriculum이 분류 성능 향상에 기여하지 못한다**는 점이 확인된다.
 
 #### S6 — Full + GT Mask Curriculum (Best)
 
@@ -136,17 +136,19 @@
 
 #### (2) Strategy 진행 경로별 성능 변화
 
-**Core progression (S1 → S2 → S3):**
-- 단계적 loss 추가가 분류 성능을 **일관되게 향상**시킨다.
-- 특히 S2→S3 전환에서 Recall이 +0.039 급증하며, Attention Mining이 결함 탐지의 핵심 기여 요소임을 보여준다.
+**기본 loss 누적 경로 (S1 → S2 → S3):**
+- S1(분류만) → S2(+CAM Guidance) → S3(+Attention Mining) 순서로 **해석 가능성 관련 loss를 단계적으로 추가**하는 경로이다.
+- 각 단계에서 분류 성능이 **일관되게 향상**되며, 특히 S2→S3 전환에서 Recall이 +0.039 급증한다.
+- Attention Mining이 결함 탐지의 핵심 기여 요소임을 보여준다.
 
-**Lightweight path (S3 → S7 → S8):**
-- Counterfactual과 curriculum을 추가할수록 분류 성능이 **점진적으로 하락**한다.
+**Localization 미포함 경로 (S3 → S7 → S8):**
+- S3에 Counterfactual(S7), GT Mask Curriculum(S8)을 추가하되, **Localization 관련 loss(`L_loc`, `L_consist`)는 포함하지 않는** 경로이다.
+- 구성요소가 추가됨에도 분류 성능이 **점진적으로 하락**한다.
 - Localization loss 없이 추가적인 regularization(counterfactual, curriculum)을 적용하면, attention 학습이 과도하게 제약되어 분류에 부정적 영향을 미친다.
 
-**Full model (S6):**
-- 모든 loss 구성요소를 갖춘 상태에서 curriculum을 적용하면 **최고 분류 성능**을 달성한다.
-- S8 대비 S6의 우위(Accuracy +0.020, Recall +0.019)는 **localization loss가 curriculum의 효과를 뒷받침하는 필수 요소**임을 시사한다.
+**전체 loss + Curriculum (S6):**
+- 모든 loss 구성요소(Localization 포함)를 갖춘 상태에서 curriculum을 적용하면 **최고 분류 성능**을 달성한다.
+- S8 대비 S6의 우위(Accuracy +0.020, Recall +0.019)는 **Localization loss가 curriculum의 효과를 뒷받침하는 필수 요소**임을 시사한다.
 
 #### (3) 결함 미탐지율(Miss Rate) 비교
 
