@@ -168,6 +168,193 @@
 
 ## 3. 해석 성능 평가 (Interpretation Performance)
 
-> **데이터 입력 대기 중** — CAM-IoU, Point Game, Energy Inside, Loc-IoU 수치 제공 시 분석을 추가한다.
+### 3.1 결과 요약
+
+| Metric | S1 | S2 | S3 | S7 | S8 | S6 |
+|--------|------|------|------|------|------|------|
+| **CAM-IoU** | 0.181 | 0.478 | 0.500 | **0.518** | 0.504 | 0.479 |
+| **Point Game** | 0.085 | 0.896 | 0.892 | 0.879 | **0.920** | 0.919 |
+| **Energy Inside** | 0.166 | 0.689 | 0.694 | 0.696 | 0.757 | **0.759** |
+| **Loc-IoU** | 0.028 | 0.029 | 0.036 | 0.035 | 0.035 | **0.253** |
+
+### 3.2 Metric별 순위
+
+**CAM-IoU 순위** (attention map과 GT mask의 공간적 겹침):
+
+| 순위 | Strategy | CAM-IoU | Baseline 대비 |
+|------|----------|---------|--------------|
+| 1 | **S7** | **0.518** | +0.337 |
+| 2 | S8 | 0.504 | +0.323 |
+| 3 | S3 | 0.500 | +0.319 |
+| 4 | S6 | 0.479 | +0.298 |
+| 5 | S2 | 0.478 | +0.297 |
+| 6 | S1 | 0.181 | — (Baseline) |
+
+**Point Game 순위** (최대 activation이 결함 내부에 위치하는 비율):
+
+| 순위 | Strategy | Point Game | Baseline 대비 |
+|------|----------|------------|--------------|
+| 1 | **S8** | **0.920** | +0.835 |
+| 2 | S6 | 0.919 | +0.834 |
+| 3 | S2 | 0.896 | +0.811 |
+| 4 | S3 | 0.892 | +0.807 |
+| 5 | S7 | 0.879 | +0.794 |
+| 6 | S1 | 0.085 | — (Baseline) |
+
+**Energy Inside 순위** (attention 에너지 중 결함 내부에 집중된 비율):
+
+| 순위 | Strategy | Energy Inside | Baseline 대비 |
+|------|----------|---------------|--------------|
+| 1 | **S6** | **0.759** | +0.593 |
+| 2 | S8 | 0.757 | +0.591 |
+| 3 | S7 | 0.696 | +0.530 |
+| 4 | S3 | 0.694 | +0.528 |
+| 5 | S2 | 0.689 | +0.523 |
+| 6 | S1 | 0.166 | — (Baseline) |
+
+**Loc-IoU 순위** (Localization head의 예측 정확도):
+
+| 순위 | Strategy | Loc-IoU | Baseline 대비 |
+|------|----------|---------|--------------|
+| 1 | **S6** | **0.253** | +0.225 |
+| 2 | S3 | 0.036 | +0.008 |
+| 3 | S7 / S8 | 0.035 | +0.007 |
+| 4 | S2 | 0.029 | +0.001 |
+| 5 | S1 | 0.028 | — (Baseline) |
+
+### 3.3 Strategy별 상세 분석
+
+#### S1 — Classification Only (Baseline)
+
+| Metric | Value |
+|--------|-------|
+| CAM-IoU | 0.181 |
+| Point Game | 0.085 |
+| Energy Inside | 0.166 |
+| Loc-IoU | 0.028 |
+
+- 모든 해석 metric에서 **압도적으로 낮은 수치**를 기록하며, 전형적인 **"맞는 답, 틀린 근거(right answer, wrong reason)"** 문제를 보인다.
+- Point Game 0.085는 최대 activation이 결함 내부에 위치할 확률이 **8.5%에 불과**함을 의미한다. 즉 91.5%의 경우 모델이 결함과 무관한 영역을 가장 강하게 활성화한다.
+- Energy Inside 0.166은 attention 에너지의 **83.4%가 결함 외부에 분산**되어 있음을 보여준다.
+- 분류 성능(Accuracy 0.888)이 양호함에도 불구하고, 모델의 판단 근거가 결함과 무관하다는 점에서 **제조 현장 배포 시 신뢰할 수 없는 모델**이다.
+
+#### S2 — + CAM Guidance
+
+| Metric | Value | vs S1 |
+|--------|-------|-------|
+| CAM-IoU | 0.478 | +0.297 (2.64x) |
+| Point Game | 0.896 | +0.811 (10.5x) |
+| Energy Inside | 0.689 | +0.523 (4.15x) |
+| Loc-IoU | 0.029 | +0.001 |
+
+- **해석 가능성이 극적으로 향상되는 첫 번째 전환점**이다.
+- CAM Guidance(`L_cam_guide`)만으로 Point Game이 0.085 → 0.896으로 **10.5배 상승**했다. 최대 activation이 이제 **89.6% 확률로 결함 내부**에 위치한다.
+- Energy Inside도 0.166 → 0.689로, attention 에너지의 약 **69%가 결함 영역에 집중**되도록 변화했다.
+- CAM을 GT mask 방향으로 직접 지도(supervision)하는 것이 해석 가능성 확보의 **가장 효과적인 단일 요소**임을 보여준다.
+- Loc-IoU는 0.029로 거의 변화 없음 — Localization head가 없으므로 구조적 한계이다.
+
+#### S3 — + Attention Mining
+
+| Metric | Value | vs S2 |
+|--------|-------|-------|
+| CAM-IoU | 0.500 | +0.022 |
+| Point Game | 0.892 | -0.004 |
+| Energy Inside | 0.694 | +0.005 |
+| Loc-IoU | 0.036 | +0.007 |
+
+- Attention Mining 추가 후 **CAM-IoU가 0.500으로 상승**하며 해석 가능성을 소폭 개선했다.
+- Point Game은 -0.004로 거의 동일하게 유지되고, Energy Inside는 +0.005 소폭 상승했다.
+- S2에서의 극적인 향상에 비하면 증분이 작지만, **분류 성능(Recall +0.039)과 해석 가능성을 동시에 개선**했다는 점에서 의미가 크다.
+- 학습 가능한 attention이 분류와 spatial alignment 두 목표를 균형 있게 달성하고 있음을 보여준다.
+
+#### S7 — S3 + Counterfactual (Localization 미포함)
+
+| Metric | Value | vs S3 |
+|--------|-------|-------|
+| CAM-IoU | **0.518** | +0.018 |
+| Point Game | 0.879 | -0.013 |
+| Energy Inside | 0.696 | +0.002 |
+| Loc-IoU | 0.035 | -0.001 |
+
+- **CAM-IoU 0.518로 전체 Strategy 중 최고치**를 달성했다.
+- Counterfactual loss(`L_cf`)가 "결함이 없었다면?" 시뮬레이션을 통해 attention이 실제 결함 영역과 더 정밀하게 겹치도록 유도한 결과이다.
+- 또한 Localization loss의 multi-task interference가 없어 attention이 **spatial alignment에 더 순수하게 집중**할 수 있는 구조적 이점도 기여한다.
+- 반면 **Point Game은 0.879로 S2~S8 중 최저**이다. CAM-IoU(전체 겹침)는 높지만 **최대 activation 지점의 정확도는 다소 낮은** 특성을 보인다. 즉, attention map이 결함 영역을 넓게 커버하지만 peak 위치는 약간 분산되는 경향이 있다.
+
+#### S8 — S7 + GT Mask Curriculum
+
+| Metric | Value | vs S7 | vs S3 |
+|--------|-------|-------|-------|
+| CAM-IoU | 0.504 | -0.014 | +0.004 |
+| Point Game | **0.920** | **+0.041** | +0.028 |
+| Energy Inside | 0.757 | **+0.061** | +0.063 |
+| Loc-IoU | 0.035 | ±0.000 | -0.001 |
+
+- GT Mask Curriculum이 S7의 약점을 정확히 보완하여 **Point Game과 Energy Inside를 크게 향상**시켰다.
+- Point Game이 0.879 → 0.920으로 **+0.041 상승**하며 **전체 Strategy 중 1위**를 달성했다. Curriculum을 통한 GT mask 주입이 최대 activation 위치를 결함 중심부로 끌어당기는 효과를 발휘했다.
+- Energy Inside도 0.696 → 0.757로 **+0.061 상승**하며, attention 에너지가 결함 내부에 더 밀집하게 되었다.
+- CAM-IoU는 0.518 → 0.504로 소폭 하락했으나, 이는 attention이 결함 영역 전체를 넓게 커버하기보다 **결함 핵심 영역에 더 집중(sharp)**해진 것으로 해석된다.
+- **Localization 없이도 높은 해석 가능성을 달성**할 수 있음을 보여주는 Strategy이다.
+
+#### S6 — Full + GT Mask Curriculum (Best Overall)
+
+| Metric | Value | vs S1 | vs S8 |
+|--------|-------|-------|-------|
+| CAM-IoU | 0.479 | +0.298 | -0.025 |
+| Point Game | 0.919 | +0.834 | -0.001 |
+| Energy Inside | **0.759** | **+0.593** | +0.002 |
+| Loc-IoU | **0.253** | **+0.225** | **+0.218** |
+
+- **Energy Inside 0.759로 전체 1위**, Point Game 0.919로 S8과 거의 동률(0.001 차이)이다.
+- S8과의 핵심 차별점은 **Loc-IoU 0.253**으로, Localization head를 포함한 유일한 Strategy이다. 결함 위치를 pixel 수준에서 예측할 수 있는 능력을 갖춘다.
+- CAM-IoU 0.479는 S7(0.518) 대비 낮지만, 이는 Localization loss가 attention 학습에 간섭하여 attention map의 공간적 겹침이 다소 줄어든 결과이다.
+- 종합적으로 **Point Game, Energy Inside, Loc-IoU 3개 metric에서 최상위권**을 유지하며, 분류 성능(Accuracy 0.907, Recall 0.949)까지 포함하면 **가장 균형 잡힌 Strategy**이다.
+
+### 3.4 핵심 분석
+
+#### (1) Metric 간 1위 Strategy가 분산됨
+
+| Metric | 1위 Strategy | 값 |
+|--------|-------------|-----|
+| CAM-IoU | S7 | 0.518 |
+| Point Game | S8 | 0.920 |
+| Energy Inside | S6 | 0.759 |
+| Loc-IoU | S6 | 0.253 |
+
+- 단일 Strategy가 모든 해석 metric을 지배하지 않으며, **각 metric의 특성에 따라 최적 Strategy가 다르다.**
+- CAM-IoU(전체 겹침)는 Localization 미포함 + Counterfactual(S7)에서, Point Game(peak 위치)과 Energy Inside(에너지 집중)는 GT Mask Curriculum(S8, S6)에서 최적화된다.
+- Loc-IoU는 Localization head가 있는 S6만이 유의미한 수치(0.253)를 보인다.
+
+#### (2) S1 → S2 전환: 해석 가능성의 결정적 전환점
+
+| Metric | S1 | S2 | 향상 배율 |
+|--------|------|------|----------|
+| CAM-IoU | 0.181 | 0.478 | 2.64x |
+| Point Game | 0.085 | 0.896 | 10.5x |
+| Energy Inside | 0.166 | 0.689 | 4.15x |
+
+- S1→S2 전환에서 **모든 해석 metric이 수 배~10배 이상 향상**된다.
+- 이후 S2→S3→...→S6 구간의 향상 폭(소수점 단위)과 비교하면, **CAM Guidance(`L_cam_guide`)가 해석 가능성 확보의 가장 핵심적인 단일 요소**임이 명확하다.
+- S2 이후의 추가 구성요소들은 이 기반 위에서 **점진적인 미세 조정(fine-tuning)** 역할을 수행한다.
+
+#### (3) GT Mask Curriculum의 효과: Point Game과 Energy Inside에 집중
+
+- S7→S8, S5(추정)→S6 모두에서 curriculum 적용 시 **Point Game과 Energy Inside가 뚜렷하게 향상**된다.
+- S7→S8: Point Game +0.041, Energy Inside +0.061
+- 훈련 초기에 GT mask를 attention에 직접 주입하여, 최대 activation 위치와 에너지 분포를 결함 중심으로 유도하는 효과가 확인된다.
+- 반면 CAM-IoU는 curriculum 적용 시 소폭 하락(S7→S8: -0.014)하는 경향이 있어, curriculum이 attention을 **더 좁고 집중된 형태(sharper)**로 만드는 특성을 보인다.
+
+#### (4) Localization 포함 여부에 따른 해석 metric 차이
+
+| Metric | Localization 미포함 최고 (S7 or S8) | S6 (Localization 포함) | 차이 |
+|--------|--------------------------------------|------------------------|------|
+| CAM-IoU | 0.518 (S7) | 0.479 | -0.039 |
+| Point Game | 0.920 (S8) | 0.919 | -0.001 |
+| Energy Inside | 0.757 (S8) | 0.759 | +0.002 |
+| Loc-IoU | 0.035 (S7/S8) | 0.253 | **+0.218** |
+
+- Point Game과 Energy Inside는 Localization 포함 여부에 **거의 영향을 받지 않는다** (차이 0.002 이내).
+- CAM-IoU는 Localization이 없는 S7이 +0.039 높다. Localization loss가 attention의 spatial 학습에 다소 간섭하여 전체 겹침 면적이 줄어드는 것으로 보인다.
+- **Loc-IoU는 Localization head 포함 여부에 따라 결정적 차이**(0.035 vs 0.253)가 발생하며, pixel 수준의 결함 위치 예측이 필요한 경우 S6가 유일한 선택이다.
 
 ---
