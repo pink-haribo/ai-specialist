@@ -2,7 +2,8 @@
 """
 Inference Speed Benchmark for GAIN-MTL
 
-Loads a checkpoint and measures average inference speed on the first 50 test images.
+Compares full forward pass vs optimized inference (skip_unused=True) to
+measure the speedup from skipping modules unused by the current strategy.
 
 Usage:
     # Interactive: select checkpoint from available ones
@@ -113,6 +114,79 @@ def parse_args():
     return args
 
 
+def run_benchmark(model, images_list, device, num_images, warmup, skip_unused=None):
+    """Run inference benchmark with specified skip_unused mode.
+
+    Args:
+        model: Model in eval mode.
+        images_list: Pre-loaded image tensors.
+        device: torch device.
+        num_images: Number of images to benchmark.
+        warmup: Number of warmup iterations.
+        skip_unused: Passed to model forward(). None=auto (optimized in eval).
+
+    Returns:
+        numpy array of latencies in milliseconds.
+    """
+    # Warmup
+    warmup_img = images_list[0].to(device)
+    with torch.no_grad():
+        for _ in range(warmup):
+            _ = model(warmup_img, skip_unused=skip_unused)
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+
+    # Benchmark
+    latencies = []
+    with torch.no_grad():
+        for i in range(num_images):
+            img = images_list[i].to(device)
+
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+
+            start = time.perf_counter()
+            _ = model(img, skip_unused=skip_unused)
+
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+
+            end = time.perf_counter()
+            latencies.append((end - start) * 1000)  # ms
+
+    return np.array(latencies)
+
+
+def print_latency_stats(latencies, label):
+    """Print latency statistics for a benchmark run."""
+    print(f'  [{label}]')
+    print(f'    Mean latency   : {latencies.mean():.2f} ms')
+    print(f'    Std latency    : {latencies.std():.2f} ms')
+    print(f'    Median latency : {np.median(latencies):.2f} ms')
+    print(f'    Min latency    : {latencies.min():.2f} ms')
+    print(f'    Max latency    : {latencies.max():.2f} ms')
+    print(f'    P95 latency    : {np.percentile(latencies, 95):.2f} ms')
+    print(f'    P99 latency    : {np.percentile(latencies, 99):.2f} ms')
+    print(f'    Throughput     : {1000.0 / latencies.mean():.1f} FPS')
+
+
+# Modules skipped per strategy group (for display)
+SKIP_INFO = {
+    'S1-S2': 'FPN, AttentionModule, MiningHead, FeatureAdapter, AttendedClsHead, LocalizationHead',
+    'S3-S5,S7': 'FPN, ClassificationHead, CAM, LocalizationHead',
+    'S6,S8': 'FPN, ClassificationHead, CAM, LocalizationHead',
+}
+
+
+def get_strategy_group(strategy):
+    if strategy <= 2:
+        return 'S1-S2'
+    elif strategy in (6, 8):
+        return 'S6,S8'
+    else:
+        return 'S3-S5,S7'
+
+
 def main():
     args = parse_args()
 
@@ -220,57 +294,54 @@ def main():
     print(f'Benchmarking on {num_images} images (batch_size={args.batch_size})')
     print(f'Image size: {image_size}')
 
-    # ============ Warmup ============
-    print(f'\nWarmup ({args.warmup} iterations)...')
-    warmup_img = images_list[0].to(device)
-    with torch.no_grad():
-        for _ in range(args.warmup):
-            _ = model(warmup_img)
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
+    # ============ Benchmark: Full Forward ============
+    print(f'\n--- Full forward (skip_unused=False) ---')
+    print(f'Warmup ({args.warmup} iterations)...')
+    latencies_full = run_benchmark(
+        model, images_list, device, num_images, args.warmup, skip_unused=False,
+    )
 
-    # ============ Benchmark ============
-    print('Running inference speed benchmark...')
-    latencies = []
-
-    with torch.no_grad():
-        for i in range(num_images):
-            img = images_list[i].to(device)
-
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-
-            start = time.perf_counter()
-            _ = model(img)
-
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-
-            end = time.perf_counter()
-            latencies.append((end - start) * 1000)  # ms
-
-    latencies = np.array(latencies)
+    # ============ Benchmark: Optimized Inference ============
+    print(f'\n--- Optimized inference (skip_unused=True) ---')
+    print(f'Warmup ({args.warmup} iterations)...')
+    latencies_opt = run_benchmark(
+        model, images_list, device, num_images, args.warmup, skip_unused=True,
+    )
 
     # ============ Results ============
-    print('\n' + '=' * 60)
+    strategy_group = get_strategy_group(args.strategy)
+    skipped_modules = SKIP_INFO[strategy_group]
+
+    print('\n' + '=' * 70)
     print(f'  Inference Speed Benchmark Results')
-    print('=' * 60)
+    print('=' * 70)
     print(f'  Checkpoint : {args.checkpoint}')
     print(f'  Device     : {device}')
-    print(f'  Strategy   : {args.strategy}')
+    print(f'  Strategy   : S{args.strategy} ({strategy_group})')
     print(f'  Image size : {image_size[0]}x{image_size[1]}')
     print(f'  Num images : {num_images}')
-    print('-' * 60)
-    print(f'  Mean latency   : {latencies.mean():.2f} ms')
-    print(f'  Std latency    : {latencies.std():.2f} ms')
-    print(f'  Median latency : {np.median(latencies):.2f} ms')
-    print(f'  Min latency    : {latencies.min():.2f} ms')
-    print(f'  Max latency    : {latencies.max():.2f} ms')
-    print(f'  P95 latency    : {np.percentile(latencies, 95):.2f} ms')
-    print(f'  P99 latency    : {np.percentile(latencies, 99):.2f} ms')
-    print('-' * 60)
-    print(f'  Throughput     : {1000.0 / latencies.mean():.2f} FPS')
-    print('=' * 60)
+    print(f'  Skipped    : {skipped_modules}')
+    print('-' * 70)
+
+    print_latency_stats(latencies_full, 'Full forward')
+    print()
+    print_latency_stats(latencies_opt, 'Optimized')
+
+    # ============ Speedup Summary ============
+    speedup = latencies_full.mean() / latencies_opt.mean()
+    saved_ms = latencies_full.mean() - latencies_opt.mean()
+    fps_full = 1000.0 / latencies_full.mean()
+    fps_opt = 1000.0 / latencies_opt.mean()
+
+    print()
+    print('-' * 70)
+    print(f'  Summary')
+    print('-' * 70)
+    print(f'  Full    : {latencies_full.mean():.2f} ms  ({fps_full:.1f} FPS)')
+    print(f'  Optimized : {latencies_opt.mean():.2f} ms  ({fps_opt:.1f} FPS)')
+    print(f'  Speedup   : {speedup:.2f}x  ({saved_ms:+.2f} ms per image)')
+    print(f'  FPS gain  : +{fps_opt - fps_full:.1f} FPS')
+    print('=' * 70)
 
 
 if __name__ == '__main__':

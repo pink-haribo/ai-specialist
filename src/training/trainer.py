@@ -434,8 +434,9 @@ class GAINMTLTrainer:
             has_defect = batch['has_defect'].to(self.device)
 
             # Forward pass (Strategy 6, 8: pass defect_mask as external attention)
+            # Use skip_unused=False to get all outputs for loss/metric computation
             ext_attn = defect_masks if getattr(self.model, '_use_external_attention', False) else None
-            outputs = self.model(images, external_attention=ext_attn)
+            outputs = self.model(images, external_attention=ext_attn, skip_unused=False)
 
             targets = {
                 'label': labels,

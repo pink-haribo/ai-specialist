@@ -418,8 +418,9 @@ def evaluate_model(
             image_paths = batch.get('image_path', [None] * len(images))
 
             # Strategy 6, 8: pass defect masks as external attention
+            # Use skip_unused=False to get all outputs for metric computation
             ext_attn = defect_masks if use_ext_attn else None
-            outputs = model(images, external_attention=ext_attn)
+            outputs = model(images, external_attention=ext_attn, skip_unused=False)
 
             # Classification (strategy-appropriate: attended for 3+, basic for 1-2)
             probs = F.softmax(outputs[cls_key], dim=1)
