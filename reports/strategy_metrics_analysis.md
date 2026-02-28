@@ -1,341 +1,173 @@
-# GAIN-MTL Strategy Metrics Analysis Report (v2)
+# GAIN-MTL Strategy 성능 평가 분석
 
-## 1. Overview
+## 1. 분석 개요
 
-This report analyzes the evaluation results of **8 training strategies** in the GAIN-MTL
-(Guided Attention Inference Multi-Task Learning) framework for manufacturing defect detection.
+본 보고서는 GAIN-MTL 프레임워크의 **6개 학습 전략(S1, S2, S3, S7, S8, S6)**에 대한 성능 평가 결과를 분석한다.
 
-Each strategy incrementally adds loss components to improve both classification performance and
-model interpretability (i.e., whether the model focuses on actual defect regions).
+평가는 두 가지 관점에서 수행한다:
+1. **분류 성능 평가**: Accuracy, Recall
+2. **해석 성능 평가**: CAM-IoU, Point Game, Energy Inside, Loc-IoU
 
-| Strategy | Description | Key Loss Components |
-|----------|-------------|---------------------|
+| Strategy | 설명 | 핵심 Loss 구성 |
+|----------|------|---------------|
 | S1 | Classification Only (Baseline) | `L_cls` |
 | S2 | + CAM Guidance | `L_cls + L_cam_guide` |
 | S3 | + Attention Mining | `L_cls + L_am + L_guide` |
-| S4 | + Localization | S3 + `L_loc + L_consist` |
-| S5 | Full (+ Counterfactual) | S4 + `L_cf` |
-| S6 | Full + GT Mask Curriculum | S5 + multiplicative fusion curriculum |
-| S7 | Attention Mining + Counterfactual | S3 + `L_cf` (no localization) |
+| S7 | Attention Mining + Counterfactual (Lightweight) | S3 + `L_cf` |
 | S8 | S7 + GT Mask Curriculum | S7 + multiplicative fusion curriculum |
-
-### Strategy Grouping
-
-- **Core Pipeline (S1-S5)**: Progressive loss stacking, S1 → S2 → S3 → S4 → S5
-- **Curriculum Variants (S6, S8)**: GT mask blending with alpha decay for guided attention
-- **Lightweight Variant (S7)**: S3 + counterfactual, skipping localization for efficiency
+| S6 | Full + GT Mask Curriculum | All losses + multiplicative fusion curriculum |
 
 ---
 
-## 2. Full Results Table
+## 2. 분류 성능 평가 (Classification Performance)
 
-| Metric | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 |
-|--------|-----|-----|-----|-----|-----|-----|-----|-----|
-| **Accuracy** | 0.89 | 0.88 | **0.90** | 0.89 | 0.89 | **0.91** | 0.893 | 0.886 |
-| **Recall** | 0.88 | 0.88 | 0.94 | 0.92 | 0.93 | **0.95** | 0.926 | 0.926 |
-| **CAM-IoU** | 0.18 | 0.48 | 0.50 | 0.50 | 0.49 | 0.48 | **0.517** | 0.500 |
-| **PointGame** | 0.08 | 0.90 | 0.89 | 0.90 | 0.89 | **0.92** | 0.88 | **0.92** |
-| **Energy-Inside** | 0.17 | 0.68 | 0.69 | 0.70 | 0.70 | **0.76** | 0.693 | 0.758 |
-| **Loc-IoU** | 0.02 | 0.02 | 0.04 | **0.27** | **0.27** | 0.25 | 0.032 | 0.035 |
+### 2.1 결과 요약
 
----
+| Metric | S1 | S2 | S3 | S7 | S8 | S6 |
+|--------|------|------|------|------|------|------|
+| **Accuracy** | 0.888 | 0.893 | 0.902 | 0.896 | 0.887 | **0.907** |
+| **Recall** | 0.880 | 0.899 | 0.938 | 0.934 | 0.930 | **0.949** |
 
-## 3. Strategy별 상세 분석
+### 2.2 Metric별 순위
 
-### 3.1 S1 — Classification Only (Baseline)
+**Accuracy 순위:**
 
-| Metric | Value | 비고 |
-|--------|-------|------|
-| Accuracy | 0.89 | 순수 분류 성능은 양호 |
-| Recall | 0.88 | 전 Strategy 중 최저 |
-| CAM-IoU | 0.18 | 극히 낮음 — 모델이 결함 영역을 보지 않음 |
-| PointGame | 0.08 | 극히 낮음 — 최대 activation이 결함 위치에 없음 |
-| Energy-Inside | 0.17 | 극히 낮음 — attention 에너지 대부분이 결함 외부 |
-| Loc-IoU | 0.02 | Localization head 없음 (baseline) |
+| 순위 | Strategy | Accuracy | Baseline 대비 |
+|------|----------|----------|--------------|
+| 1 | **S6** | **0.907** | +0.019 |
+| 2 | S3 | 0.902 | +0.014 |
+| 3 | S7 | 0.896 | +0.008 |
+| 4 | S2 | 0.893 | +0.005 |
+| 5 | S1 | 0.888 | — (Baseline) |
+| 6 | S8 | 0.887 | -0.001 |
 
-**해석:**
-- 전형적인 **"맞는 답, 틀린 근거 (right answer, wrong reason)"** 케이스.
-- Accuracy 0.89로 분류 자체는 작동하지만, CAM-IoU 0.18 / PointGame 0.08은 모델이 **결함과 무관한 영역**을 보고 판단하고 있음을 의미.
-- 이전 결과(CAM-IoU 0.116) 대비 0.18로 개선됨 → per-image min-max normalization 적용 효과.
-- 그러나 PointGame이 0.161 → 0.08로 하락한 것은 normalization 후에도 **최대 activation 위치 자체는 여전히 결함 외부**에 있음을 보여줌.
-- 제조 현장 배포 시 **신뢰할 수 없는 모델** — 높은 정확도에도 불구하고 잘못된 추론 근거.
+**Recall 순위:**
 
----
+| 순위 | Strategy | Recall | Baseline 대비 |
+|------|----------|--------|--------------|
+| 1 | **S6** | **0.949** | +0.069 |
+| 2 | S3 | 0.938 | +0.058 |
+| 3 | S7 | 0.934 | +0.054 |
+| 4 | S8 | 0.930 | +0.050 |
+| 5 | S2 | 0.899 | +0.019 |
+| 6 | S1 | 0.880 | — (Baseline) |
 
-### 3.2 S2 — CAM Guidance
+### 2.3 Strategy별 상세 분석
 
-| Metric | Value | vs S1 변화 |
-|--------|-------|-----------|
-| Accuracy | 0.88 | -0.01 |
-| Recall | 0.88 | ±0.00 |
-| CAM-IoU | 0.48 | **+0.30** (2.67x) |
-| PointGame | 0.90 | **+0.82** (11.3x) |
-| Energy-Inside | 0.68 | **+0.51** (4.0x) |
-| Loc-IoU | 0.02 | ±0.00 |
+#### S1 — Classification Only (Baseline)
 
-**해석:**
-- **해석 가능성(interpretability)이 극적으로 향상**되는 첫 번째 전환점.
-- Weight-based CAM을 GT mask로 직접 지도(supervision)하는 것이 매우 효과적:
-  - PointGame 0.08 → 0.90: 최대 activation이 이제 **90% 확률로 결함 내부**에 위치.
-  - CAM-IoU 0.18 → 0.48: attention map과 GT mask 간의 공간적 겹침이 크게 증가.
-  - Energy-Inside 0.17 → 0.68: attention 에너지의 68%가 결함 영역 내에 집중.
-- **분류 성능은 소폭 하락** (Accuracy 0.89 → 0.88).
-  - `L_cam_guide`가 feature 학습을 spatial 정보 쪽으로 편향시켜 분류에 약간의 간섭 발생.
-  - Recall은 0.88로 변화 없음 — 결함 탐지 민감도에는 영향 미미.
-- Localization head가 없으므로 Loc-IoU는 여전히 0.02 (아키텍처적 한계).
+| Metric | Value |
+|--------|-------|
+| Accuracy | 0.888 |
+| Recall | 0.880 |
 
----
+- 분류만 수행하는 **Baseline 모델**로, Accuracy 0.888 / Recall 0.880의 기본 성능을 보인다.
+- Recall 0.880은 전체 Strategy 중 **최저치**로, 결함 샘플의 약 **12%를 미탐지**한다.
+- 해석 가능성 관련 loss가 없는 순수 분류 모델이므로, 이후 Strategy의 분류 성능 변화를 측정하는 기준점이 된다.
 
-### 3.3 S3 — Attention Mining + Guided Attention
+#### S2 — + CAM Guidance
 
-| Metric | Value | vs S2 변화 |
-|--------|-------|-----------|
-| Accuracy | 0.90 | **+0.02** |
-| Recall | 0.94 | **+0.06** |
-| CAM-IoU | 0.50 | +0.02 |
-| PointGame | 0.89 | -0.01 |
-| Energy-Inside | 0.69 | +0.01 |
-| Loc-IoU | 0.04 | +0.02 |
+| Metric | Value | vs S1 |
+|--------|-------|-------|
+| Accuracy | 0.893 | +0.005 |
+| Recall | 0.899 | +0.019 |
 
-**해석:**
-- **분류와 해석 가능성 모두 개선**되는 핵심 Strategy.
-- Attention Mining Module(GAIN)이 학습 가능한 attention을 통해 분류에 유의미하게 기여:
-  - Recall 0.88 → 0.94: **+6%p 의 큰 도약** — attention이 실제 결함 feature를 포착.
-  - Accuracy 0.88 → 0.90: +2%p 개선.
-- CAM quality도 S2보다 소폭 개선 (CAM-IoU 0.48 → 0.50):
-  - 이전 결과에서는 S3 < S2 였으나, 이번에는 **S3 >= S2로 역전**.
-  - `lambda_guide`를 1.5로 강화한 효과 — 학습된 attention이 spatial 정확도를 유지하면서 분류 성능 향상.
-- **S1-S5 중 분류-해석 가능성 균형이 가장 우수한 transition point.**
+- CAM Guidance(`L_cam_guide`)를 추가하여 Accuracy와 Recall이 모두 소폭 상승했다.
+- Recall이 +0.019 향상되어, **CAM의 공간적 지도(spatial supervision)가 분류 성능에도 긍정적으로 작용**함을 보여준다.
+- CAM을 GT mask 방향으로 유도하는 것이 feature 학습의 질을 높여 분류에도 간접적인 이득을 제공한 것으로 해석된다.
 
----
+#### S3 — + Attention Mining
 
-### 3.4 S4 — + Localization
+| Metric | Value | vs S2 | vs S1 |
+|--------|-------|-------|-------|
+| Accuracy | 0.902 | +0.009 | +0.014 |
+| Recall | 0.938 | +0.039 | +0.058 |
 
-| Metric | Value | vs S3 변화 |
-|--------|-------|-----------|
-| Accuracy | 0.89 | -0.01 |
-| Recall | 0.92 | **-0.02** |
-| CAM-IoU | 0.50 | ±0.00 |
-| PointGame | 0.90 | +0.01 |
-| Energy-Inside | 0.70 | +0.01 |
-| Loc-IoU | 0.27 | **+0.23** |
+- **분류 성능이 크게 향상되는 핵심 전환점**이다.
+- Recall이 S2 대비 **+0.039의 큰 도약**을 보여, Attention Mining(`L_am`)과 Guided Attention(`L_guide`)이 결함 탐지 민감도를 크게 강화했다.
+- Accuracy도 0.902로 S1~S3 구간에서 **가장 높은 수치**를 기록했다.
+- 학습 가능한 attention이 실제 결함 feature에 집중하도록 유도함으로써, 분류 성능과 해석 가능성을 동시에 향상시키는 효과가 확인된다.
+- **비용 대비 성능이 가장 우수한 Strategy**로, 3개의 loss만으로 높은 분류 성능을 달성했다.
 
-**해석:**
-- **Localization 능력이 본격적으로 활성화** (Loc-IoU 0.04 → 0.27).
-  - 결함 위치를 pixel 수준에서 segmentation 가능해짐.
-  - `L_loc` (Dice + BCE) + `L_consist` (attention-localization 정합성)가 함께 작동.
-- **Multi-task interference가 여전히 관찰**되지만 이전보다 완화:
-  - Accuracy 0.90 → 0.89 (-1%p), Recall 0.94 → 0.92 (-2%p).
-  - 이전 결과 (Acc 0.883→0.872, Recall 0.894→0.866) 대비 **하락 폭이 크게 줄어듬**.
-  - `lambda_loc` 0.3→0.2 축소 + `loc_warmup_ratio: 0.5` 적용 효과 확인.
-- CAM quality는 안정적으로 유지 (CAM-IoU 0.50, PointGame 0.90).
-  - Localization task가 attention의 공간적 학습에 보조적 역할 수행.
+#### S7 — S3 + Counterfactual (Localization 미포함)
 
----
+| Metric | Value | vs S3 |
+|--------|-------|-------|
+| Accuracy | 0.896 | -0.006 |
+| Recall | 0.934 | -0.004 |
 
-### 3.5 S5 — Full (+ Counterfactual)
+- S3에 Counterfactual(`L_cf`)을 추가한 Strategy이다. 단, S6과 달리 **Localization 관련 loss(`L_loc`, `L_consist`)와 Localization head가 포함되지 않는다.**
+- Accuracy와 Recall이 S3 대비 각각 -0.006, -0.004 소폭 하락했다.
+- Counterfactual loss가 attention을 더 보수적(conservative)으로 만들어 **분류 성능에 약간의 trade-off**가 발생한 것으로 보인다.
+- 다만 하락 폭이 미미하여, Counterfactual이 분류에 미치는 부정적 영향은 제한적이다.
 
-| Metric | Value | vs S4 변화 |
-|--------|-------|-----------|
-| Accuracy | 0.89 | ±0.00 |
-| Recall | 0.93 | **+0.01** |
-| CAM-IoU | 0.49 | -0.01 |
-| PointGame | 0.89 | -0.01 |
-| Energy-Inside | 0.70 | ±0.00 |
-| Loc-IoU | 0.27 | ±0.00 |
+#### S8 — S7 + GT Mask Curriculum
 
-**해석:**
-- Counterfactual reasoning (`L_cf`)이 **Recall을 회복** (0.92 → 0.93).
-  - "결함이 없었다면?" 을 시뮬레이션하여 모델이 실제 결함 feature에 의존하도록 강제.
-  - S4에서의 multi-task interference로 인한 Recall 하락을 부분적으로 복원.
-- CAM quality는 S4와 거의 동일 — counterfactual이 **attention 품질에는 중립적** 영향.
-- Localization도 0.27로 동일 유지.
-- S5는 **모든 loss를 사용하는 full strategy**로서, 균형 잡힌 성능을 보여주지만
-  S3 대비 분류 성능 이점이 크지 않음 (Acc 동일, Recall -1%p).
+| Metric | Value | vs S7 | vs S3 |
+|--------|-------|-------|-------|
+| Accuracy | 0.887 | -0.009 | -0.015 |
+| Recall | 0.930 | -0.004 | -0.008 |
 
----
+- S7에 GT Mask Curriculum을 추가했으나, 분류 성능이 **추가 하락**했다.
+- Accuracy 0.887은 **전체 Strategy 중 최저**로, Baseline(S1) 수준까지 떨어졌다.
+- Localization loss 없이 GT mask curriculum만 적용한 것이 효과적이지 않았으며, 오히려 분류 학습에 간섭을 일으킨 것으로 분석된다.
+- **Localization이 없는 S7/S8에서는 curriculum이 분류 성능 향상에 기여하지 못한다**는 점이 확인된다.
 
-### 3.6 S6 — Full + GT Mask Curriculum (Best Overall)
+#### S6 — Full + GT Mask Curriculum (Best)
 
-| Metric | Value | vs S5 변화 |
-|--------|-------|-----------|
-| Accuracy | **0.91** | **+0.02** |
-| Recall | **0.95** | **+0.02** |
-| CAM-IoU | 0.48 | -0.01 |
-| PointGame | **0.92** | **+0.03** |
-| Energy-Inside | **0.76** | **+0.06** |
-| Loc-IoU | 0.25 | -0.02 |
+| Metric | Value | vs S1 | vs S3 |
+|--------|-------|-------|-------|
+| Accuracy | **0.907** | **+0.019** | +0.005 |
+| Recall | **0.949** | **+0.069** | +0.011 |
 
-**해석:**
-- **전체 Strategy 중 최고 성능** — 분류와 해석 가능성 모두 최상위.
-- GT mask multiplicative fusion + curriculum alpha decay가 핵심:
-  - 훈련 초기 GT mask를 50% 비율로 attention에 직접 주입 → 정확한 spatial prior 제공.
-  - 점진적으로 alpha를 0으로 감소 (70% epoch까지) → inference 조건과 일치시킴.
-- **Classification**:
-  - Accuracy 0.91 (전체 1위), Recall 0.95 (전체 1위).
-  - 결함 미탐지율이 S1 대비 약 **58% 감소** (miss rate: 12% → 5%).
-- **Interpretability**:
-  - PointGame 0.92 (전체 공동 1위), Energy-Inside 0.76 (전체 1위).
-  - Attention energy의 76%가 결함 내부에 집중 — 가장 높은 spatial focus.
-  - CAM-IoU는 0.48로 소폭 하락하나, PointGame/Energy-Inside가 더 중요한 실용 지표.
-- **Localization은 소폭 하락** (0.27 → 0.25):
-  - GT mask curriculum이 attention module의 학습 dynamics를 변경하여 localization head에 경미한 영향.
-  - 그러나 -0.02 수준으로 실질적 차이 미미.
+- **분류 성능 전체 1위** — Accuracy 0.907, Recall 0.949로 두 metric 모두 최고치를 달성했다.
+- Recall 0.949는 결함 미탐지율이 약 **5.1%**에 불과하며, Baseline(S1) 대비 미탐지율을 **12.0% → 5.1%로 약 58% 감소**시켰다.
+- 모든 loss 구성요소 + GT Mask Curriculum의 조합이 시너지 효과를 발휘하여, **분류와 해석 가능성 목표가 상호 보완적으로 작용**했다.
+- S8과 달리 full loss stack(localization 포함) 위에 curriculum을 적용한 것이 핵심적인 차이로, **curriculum의 효과는 충분한 loss 구조가 뒷받침될 때 극대화**됨을 시사한다.
+
+### 2.4 핵심 분석
+
+#### (1) Accuracy vs Recall 분포 특성
+
+- **Accuracy 범위**: 0.887 ~ 0.907 (2.0%p) — Strategy 간 차이가 상대적으로 작다.
+- **Recall 범위**: 0.880 ~ 0.949 (6.9%p) — Strategy 간 차이가 크다.
+- Recall이 Accuracy보다 **약 3.5배 넓은 범위**를 보여, 학습 전략이 결함 탐지 민감도(Recall)에 더 큰 영향을 미침을 확인할 수 있다.
+- 이는 attention 기반 loss 구성이 주로 **결함 클래스의 feature 표현을 강화**하는 방향으로 작용하기 때문이다.
+
+#### (2) Strategy 진행 경로별 성능 변화
+
+**기본 loss 누적 경로 (S1 → S2 → S3):**
+- S1(분류만) → S2(+CAM Guidance) → S3(+Attention Mining) 순서로 **해석 가능성 관련 loss를 단계적으로 추가**하는 경로이다.
+- 각 단계에서 분류 성능이 **일관되게 향상**되며, 특히 S2→S3 전환에서 Recall이 +0.039 급증한다.
+- Attention Mining이 결함 탐지의 핵심 기여 요소임을 보여준다.
+
+**Localization 미포함 경로 (S3 → S7 → S8):**
+- S3에 Counterfactual(S7), GT Mask Curriculum(S8)을 추가하되, **Localization 관련 loss(`L_loc`, `L_consist`)는 포함하지 않는** 경로이다.
+- 구성요소가 추가됨에도 분류 성능이 **점진적으로 하락**한다.
+- Localization loss 없이 추가적인 regularization(counterfactual, curriculum)을 적용하면, attention 학습이 과도하게 제약되어 분류에 부정적 영향을 미친다.
+
+**전체 loss + Curriculum (S6):**
+- 모든 loss 구성요소(Localization 포함)를 갖춘 상태에서 curriculum을 적용하면 **최고 분류 성능**을 달성한다.
+- S8 대비 S6의 우위(Accuracy +0.020, Recall +0.019)는 **Localization loss가 curriculum의 효과를 뒷받침하는 필수 요소**임을 시사한다.
+
+#### (3) 결함 미탐지율(Miss Rate) 비교
+
+| Strategy | Recall | Miss Rate | S1 대비 개선율 |
+|----------|--------|-----------|--------------|
+| S1 | 0.880 | 12.0% | — |
+| S2 | 0.899 | 10.1% | 15.8% |
+| S3 | 0.938 | 6.2% | 48.3% |
+| S7 | 0.934 | 6.6% | 45.0% |
+| S8 | 0.930 | 7.0% | 41.7% |
+| S6 | 0.949 | 5.1% | **57.5%** |
+
+- S6는 Baseline 대비 결함 미탐지율을 **57.5% 감소**시켜, 제조 현장에서의 실질적 안전성 향상에 가장 크게 기여한다.
+- S3도 48.3% 감소로 우수하며, loss 복잡도 대비 효율이 높다.
 
 ---
 
-### 3.7 S7 — Attention Mining + Counterfactual (Lightweight)
+## 3. 해석 성능 평가 (Interpretation Performance)
 
-| Metric | Value | vs S3 변화 | vs S5 변화 |
-|--------|-------|-----------|-----------|
-| Accuracy | 0.893 | -0.007 | +0.003 |
-| Recall | 0.926 | -0.014 | -0.004 |
-| CAM-IoU | **0.517** | +0.017 | +0.027 |
-| PointGame | 0.88 | -0.01 | -0.01 |
-| Energy-Inside | 0.693 | +0.003 | -0.007 |
-| Loc-IoU | 0.032 | -0.008 | -0.238 |
-
-**해석:**
-- S3에 counterfactual만 추가한 **경량화 Strategy** (localization 제외).
-- **CAM-IoU 0.517로 전체 Strategy 중 최고치 달성.**
-  - Localization head가 없기 때문에 attention module이 분류와 spatial alignment에만 집중.
-  - `L_cf`가 attention의 quality를 counterfactual 방식으로 보강.
-  - Localization loss의 multi-task interference가 없어서 attention이 더 순수하게 학습.
-- **분류 성능은 S3보다 소폭 하락** (Recall 0.94 → 0.926, Acc 0.90 → 0.893):
-  - Counterfactual loss가 attention을 더 conservative하게 만들어 약간의 분류 trade-off 발생.
-- **Localization 능력 없음** (Loc-IoU 0.032) — 설계 의도대로.
-- 정밀한 결함 segmentation이 불필요하고, **해석 가능한 분류만 필요한 경우 효율적인 선택**.
+> **데이터 입력 대기 중** — CAM-IoU, Point Game, Energy Inside, Loc-IoU 수치 제공 시 분석을 추가한다.
 
 ---
-
-### 3.8 S8 — S7 + GT Mask Curriculum
-
-| Metric | Value | vs S7 변화 | vs S6 변화 |
-|--------|-------|-----------|-----------|
-| Accuracy | 0.886 | -0.007 | -0.024 |
-| Recall | 0.926 | ±0.000 | -0.024 |
-| CAM-IoU | 0.500 | -0.017 | +0.020 |
-| PointGame | **0.92** | +0.04 | ±0.00 |
-| Energy-Inside | 0.758 | +0.065 | -0.002 |
-| Loc-IoU | 0.035 | +0.003 | -0.215 |
-
-**해석:**
-- S7에 GT mask curriculum을 추가한 변형.
-- **Interpretability가 S7 대비 개선**:
-  - PointGame 0.88 → 0.92 (+0.04): curriculum이 spatial accuracy를 높임.
-  - Energy-Inside 0.693 → 0.758 (+0.065): attention energy가 결함에 더 집중.
-  - CAM-IoU는 0.517 → 0.500 (-0.017)으로 소폭 하락.
-- **분류 성능은 S7 대비 소폭 하락** (Accuracy 0.893 → 0.886):
-  - GT mask 주입이 초기 학습을 돕지만, localization loss 없이는 curriculum의 이점이 제한적.
-- S6 대비 분류에서 열세 (Acc -0.024, Recall -0.024)이나 CAM-IoU에서 우세 (+0.020).
-- **Localization 불필요 + 높은 interpretability가 필요한 시나리오에서 S6의 대안**.
-
----
-
-## 4. 이전 결과와의 비교 (v1 → v2)
-
-S1~S5에 대해 이전 결과(v1)와 현재 결과(v2)를 비교합니다.
-
-| Metric | Strategy | v1 | v2 | 변화 | 원인 |
-|--------|----------|-----|-----|------|------|
-| Accuracy | S1 | 0.878 | 0.89 | +0.012 | 학습 안정화 |
-| Accuracy | S4 | 0.872 | 0.89 | **+0.018** | `lambda_loc` 축소 + warmup 효과 |
-| Recall | S3 | 0.894 | 0.94 | **+0.046** | `lambda_guide` 1.5 강화 효과 |
-| Recall | S4 | 0.866 | 0.92 | **+0.054** | multi-task interference 완화 |
-| CAM-IoU | S1 | 0.116 | 0.18 | +0.064 | per-image normalization 적용 |
-| CAM-IoU | S3 | 0.451 | 0.50 | **+0.049** | attention 학습 개선 |
-| PointGame | S1 | 0.161 | 0.08 | **-0.081** | normalization 후 threshold 영향 |
-| Energy-Inside | S3 | 0.626 | 0.69 | +0.064 | guided attention 강화 |
-
-### 주요 개선 사항
-1. **S4 multi-task interference 해소**: Acc +1.8%p, Recall +5.4%p — `lambda_loc` 축소와 warmup이 효과적.
-2. **S3 CAM quality 역전**: S2 < S3 으로 변경 — `lambda_guide` 1.5가 attention spatial 정확도 유지.
-3. **S1 PointGame 하락**: per-image normalization이 PointGame에는 부정적 영향. 최대 activation 위치 자체는 변하지 않으므로 정상적인 현상.
-
----
-
-## 5. 종합 비교 — Strategy Profile
-
-```
-         Accuracy    Recall     CAM-IoU    PointGame   Energy-In   Loc-IoU
-S1       ████░░  0.89  ████░░  0.88  █░░░░░  0.18  ░░░░░░  0.08  █░░░░░  0.17  ░░░░░░  0.02
-S2       ████░░  0.88  ████░░  0.88  █████░  0.48  █████░  0.90  ████░░  0.68  ░░░░░░  0.02
-S3       █████░  0.90  █████░  0.94  █████░  0.50  █████░  0.89  ████░░  0.69  ░░░░░░  0.04
-S4       ████░░  0.89  █████░  0.92  █████░  0.50  █████░  0.90  ████░░  0.70  ██░░░░  0.27
-S5       ████░░  0.89  █████░  0.93  █████░  0.49  █████░  0.89  ████░░  0.70  ██░░░░  0.27
-S6 ★     █████░  0.91  ██████  0.95  █████░  0.48  █████░  0.92  █████░  0.76  ██░░░░  0.25
-S7       ████░░  0.893 █████░  0.926 █████░  0.517 █████░  0.88  ████░░  0.693 ░░░░░░  0.032
-S8       ████░░  0.886 █████░  0.926 █████░  0.500 █████░  0.92  █████░  0.758 ░░░░░░  0.035
-```
-
----
-
-## 6. Metric별 순위 정리
-
-### Classification Ranking
-
-| Rank | Accuracy | Recall |
-|------|----------|--------|
-| 1 | **S6 (0.91)** | **S6 (0.95)** |
-| 2 | S3 (0.90) | S3 (0.94) |
-| 3 | S7 (0.893) | S5 (0.93) |
-| 4 | S1/S4/S5 (0.89) | S7/S8 (0.926) |
-| 5 | S8 (0.886) | S4 (0.92) |
-| 6 | S2 (0.88) | S1/S2 (0.88) |
-
-### Interpretability Ranking
-
-| Rank | CAM-IoU | PointGame | Energy-Inside |
-|------|---------|-----------|---------------|
-| 1 | **S7 (0.517)** | **S6/S8 (0.92)** | **S6 (0.76)** |
-| 2 | S3/S4 (0.50) | S2/S4 (0.90) | S8 (0.758) |
-| 3 | S8 (0.500) | S3/S5 (0.89) | S4/S5 (0.70) |
-| 4 | S5 (0.49) | S7 (0.88) | S3/S7 (0.69) |
-| 5 | S2/S6 (0.48) | S1 (0.08) | S2 (0.68) |
-| 6 | S1 (0.18) | — | S1 (0.17) |
-
-### Localization Ranking
-
-| Rank | Loc-IoU |
-|------|---------|
-| 1 | **S4/S5 (0.27)** |
-| 2 | S6 (0.25) |
-| 3 | S3 (0.04) |
-| 4 | S8 (0.035) |
-| 5 | S7 (0.032) |
-| 6 | S1/S2 (0.02) |
-
----
-
-## 7. 종합 정리 및 권장 사항
-
-### 7.1 용도별 추천 Strategy
-
-| 사용 시나리오 | 추천 Strategy | 이유 |
-|-------------|-------------|------|
-| **Production (결함 탐지 최우선)** | **S6** | Accuracy 0.91, Recall 0.95 — 결함 미탐지율 최저. Energy-Inside 0.76으로 높은 해석 가능성. |
-| **Interpretability 최우선** | **S7** | CAM-IoU 0.517 (최고). Localization 불필요 시 attention quality 최적화. |
-| **경량 + 균형** | **S3** | Localization/Counterfactual 없이 Acc 0.90, Recall 0.94, CAM-IoU 0.50. 학습 비용 대비 성능비 최고. |
-| **결함 Segmentation 필요** | **S5** | Loc-IoU 0.27 + Recall 0.93 + balanced interpretability. |
-| **해석 가능성 + Localization 없이 배포** | **S8** | PointGame 0.92, Energy-Inside 0.758. S7보다 spatial focus 강화. |
-
-### 7.2 핵심 발견 사항
-
-1. **S6가 최적의 production 모델**: 분류(Accuracy/Recall)와 해석 가능성(PointGame/Energy-Inside) 모두 최상위. GT mask curriculum이 attention 학습에 강력한 spatial prior를 제공하면서도 inference 시에는 GT mask 없이 동작.
-
-2. **Localization은 양날의 검**: S4에서 관찰되듯 localization loss는 분류 성능을 약간 저하시키지만 (S3→S4: Recall -2%p), 결함 위치를 pixel 수준으로 제공하는 유일한 방법. `loc_warmup_ratio: 0.5`로 interference를 완화했지만 완전히 해소되지는 않음.
-
-3. **Counterfactual의 역할 재평가**: S5 vs S4에서 Recall +1%p 회복, S7 vs S3에서는 CAM-IoU +0.017 향상. Counterfactual은 분류보다 **attention quality 개선에 더 효과적**인 것으로 나타남.
-
-4. **Curriculum Learning 효과 검증**: S6 vs S5 (Acc +2%p, Recall +2%p), S8 vs S7 (PointGame +0.04, EI +0.065). GT mask curriculum은 localization이 있는 S6에서 더 큰 분류 향상을, localization이 없는 S8에서 더 큰 interpretability 향상을 가져옴.
-
-5. **S3가 cost-effective sweet spot**: 학습 복잡도가 낮으면서 (loss 3개) Accuracy 0.90, Recall 0.94, CAM-IoU 0.50의 균형 잡힌 성능. 리소스 제약 시 첫 번째 선택.
-
-### 7.3 다음 단계 제안
-
-| Priority | Action | Expected Impact |
-|----------|--------|-----------------|
-| 1 | **S6를 production 모델로 채택** | 최고 Recall 0.95 + 강력한 해석 가능성 |
-| 2 | **S6에 `lambda_cam_guide` 추가 실험** | CAM-IoU 0.48 → 0.50+ 개선 가능성 |
-| 3 | **S7 + localization warmup 실험** | CAM-IoU 0.517 유지하면서 Loc-IoU 향상 시도 |
-| 4 | **S6/S8 curriculum 하이퍼파라미터 탐색** | `alpha_start`, `alpha_ratio` 변경으로 추가 개선 여지 탐색 |
