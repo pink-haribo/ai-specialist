@@ -272,6 +272,7 @@ class GAINMTLModel(nn.Module):
         defect_mask: Optional[torch.Tensor] = None,
         external_attention: Optional[torch.Tensor] = None,
         return_attention: bool = True,
+        skip_unused: Optional[bool] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass through the GAIN-MTL model.
@@ -287,6 +288,10 @@ class GAINMTLModel(nn.Module):
                 During early training, optional curriculum alpha blending mixes in
                 GT replace signal (controlled by set_external_attention_alpha()).
             return_attention: Whether to return attention maps
+            skip_unused: If True, skip modules unused by current strategy for
+                faster inference. Defaults to True when not training, False when
+                training. Pass False explicitly during evaluation to get all
+                outputs (e.g., localization_map_prob for metric computation).
 
         Returns:
             Dictionary containing:
@@ -303,6 +308,17 @@ class GAINMTLModel(nn.Module):
         batch_size = x.size(0)
         input_size = x.shape[2:]  # (H, W)
 
+        # ============ Inference Optimization ============
+        # When skip_unused is True (default during eval), skip modules not
+        # required by the current strategy to reduce inference latency.
+        # - FPN + Localization head: always skipped (auxiliary training task)
+        # - Strategy 1-2: also skip attention module, mining head, attended cls
+        # - Strategy 3+: also skip baseline classification head + CAM generation
+        _skip = skip_unused if skip_unused is not None else (not self.training)
+        _need_attention = self._use_attended_cls or not _skip
+        _need_cls_cam = (not self._use_attended_cls) or not _skip
+        _need_loc = not _skip
+
         # ============ Feature Extraction ============
         # Backbone returns block stage features + conv_head output.
         # e.g. for B0: [stage3(48ch), stage4(96ch), stage5(112ch), stage6(192ch), conv_head(1280ch)]
@@ -311,107 +327,105 @@ class GAINMTLModel(nn.Module):
         final_features = all_features[-1]      # conv_head output → classification/CAM
 
         # ============ FPN Processing ============
-        fpn_fused = self.fpn.get_fused_features(fpn_features_in)
+        # FPN output feeds only the localization head (auxiliary training task).
+        # Skipped during inference as localization is not used for prediction.
+        if _need_loc:
+            fpn_fused = self.fpn.get_fused_features(fpn_features_in)
+        else:
+            fpn_fused = None
 
         # ============ GAIN Attention ============
-        # Always generate internal attention (needed as fallback for mask-less samples)
-        attended_features_int, attention_logits_int = self.attention_module(
-            final_features, return_attention=True
-        )
-        mined_attention_logits_int = self.attention_mining_head(final_features)
-        combined_logits_int = (attention_logits_int + mined_attention_logits_int) / 2
-
-        if external_attention is not None:
-            attn_map_ext = F.interpolate(
-                external_attention, size=final_features.shape[2:],
-                mode='bilinear', align_corners=False,
+        # Strategy 1-2 uses weight-based CAM only; attention module is not trained.
+        if _need_attention:
+            attended_features_int, attention_logits_int = self.attention_module(
+                final_features, return_attention=True
             )
+            mined_attention_logits_int = self.attention_mining_head(final_features)
+            combined_logits_int = (attention_logits_int + mined_attention_logits_int) / 2
 
-            # Determine which samples have external attention (non-zero mask)
-            has_ext = (external_attention.flatten(1).sum(1) > 0)  # (B,)
-            has_ext = has_ext.view(-1, 1, 1, 1)
-
-            # Multiplicative fusion: external × internal (unified for train & inference)
-            # - Samples WITH external mask: fused = ext * internal (normalized)
-            # - Samples WITHOUT external mask: fall back to internal attention
-            # This eliminates the train/inference distribution mismatch that caused
-            # the attended_classification_head to see different input distributions.
-            internal_prob = torch.sigmoid(combined_logits_int)
-            fused_attention = attn_map_ext * internal_prob
-
-            # Per-sample max normalization (only meaningful for samples with ext mask)
-            max_vals = fused_attention.flatten(1).max(dim=1).values
-            max_vals = max_vals.clamp(min=1e-6).view(-1, 1, 1, 1)
-            fused_norm = fused_attention / max_vals
-
-            # Curriculum alpha blending (training only):
-            # Early training: blend in GT replace signal to bootstrap learning
-            # Late training: pure fusion (matches inference distribution)
-            if self.training and self._ext_attn_blend_alpha > 0:
-                blended = (
-                    self._ext_attn_blend_alpha * attn_map_ext
-                    + (1 - self._ext_attn_blend_alpha) * fused_norm
+            if external_attention is not None:
+                attn_map_ext = F.interpolate(
+                    external_attention, size=final_features.shape[2:],
+                    mode='bilinear', align_corners=False,
                 )
-                effective_attention = torch.where(has_ext, blended, internal_prob)
+
+                has_ext = (external_attention.flatten(1).sum(1) > 0)
+                has_ext = has_ext.view(-1, 1, 1, 1)
+
+                internal_prob = torch.sigmoid(combined_logits_int)
+                fused_attention = attn_map_ext * internal_prob
+
+                max_vals = fused_attention.flatten(1).max(dim=1).values
+                max_vals = max_vals.clamp(min=1e-6).view(-1, 1, 1, 1)
+                fused_norm = fused_attention / max_vals
+
+                if self.training and self._ext_attn_blend_alpha > 0:
+                    blended = (
+                        self._ext_attn_blend_alpha * attn_map_ext
+                        + (1 - self._ext_attn_blend_alpha) * fused_norm
+                    )
+                    effective_attention = torch.where(has_ext, blended, internal_prob)
+                else:
+                    effective_attention = torch.where(has_ext, fused_norm, internal_prob)
+
+                attended_features = final_features * effective_attention
+                fused_logits = torch.logit(effective_attention.clamp(1e-6, 1 - 1e-6))
+                combined_attention_logits = fused_logits
+                attention_logits = fused_logits
+                mined_attention_logits = fused_logits
             else:
-                # Pure multiplicative fusion with fallback for normal samples
-                effective_attention = torch.where(has_ext, fused_norm, internal_prob)
+                attended_features = attended_features_int
+                combined_attention_logits = combined_logits_int
+                attention_logits = attention_logits_int
+                mined_attention_logits = mined_attention_logits_int
 
-            attended_features = final_features * effective_attention
-            fused_logits = torch.logit(effective_attention.clamp(1e-6, 1 - 1e-6))
-            combined_attention_logits = fused_logits
-            attention_logits = fused_logits
-            mined_attention_logits = fused_logits
+            # Attended features classification (GAIN core)
+            attended_adapted = self.feature_adapter(attended_features)
+            attended_cls_logits, _ = self.attended_classification_head(
+                attended_adapted, return_features=False
+            )
         else:
-            attended_features = attended_features_int
-            combined_attention_logits = combined_logits_int
-            attention_logits = attention_logits_int
-            mined_attention_logits = mined_attention_logits_int
+            # Strategy 1-2: attention module not trained, skip entirely
+            attended_cls_logits = None
+            combined_attention_logits = None
+            combined_logits_int = None
+            attention_logits = None
+            mined_attention_logits = None
+            attended_features = None
 
-        # ============ Classification ============
-        # Stream 1: Full features classification
-        cls_logits, cls_features = self.classification_head(
-            final_features, return_features=True
-        )
-
-        # Generate Weight-based CAM logits from classification head
-        # Returns logits (pre-sigmoid) for numerical stability with BCE loss
-        cam_logits = self.classification_head.get_cam(final_features, class_idx=1)
-
-        # Stream 2: Attended features classification (GAIN core)
-        attended_adapted = self.feature_adapter(attended_features)
-        attended_cls_logits, _ = self.attended_classification_head(
-            attended_adapted, return_features=False
-        )
+        # ============ Classification + CAM ============
+        # Strategy 3+ uses attended_cls_logits; baseline cls + CAM not needed.
+        if _need_cls_cam:
+            cls_logits, cls_features = self.classification_head(
+                final_features, return_features=True
+            )
+            cam_logits = self.classification_head.get_cam(final_features, class_idx=1)
+        else:
+            cls_logits = None
+            cls_features = None
+            cam_logits = None
 
         # ============ Localization ============
-        # Note: Returns logits (pre-sigmoid) for numerical stability with BCE loss
-        localization_logits = self.localization_head(
-            fpn_fused, target_size=input_size
-        )
+        if _need_loc:
+            localization_logits = self.localization_head(
+                fpn_fused, target_size=input_size
+            )
+        else:
+            localization_logits = None
 
         # ============ Build Output Dictionary ============
-        # All spatial maps use consistent format:
-        #   - *_map / cam: logits (pre-sigmoid) for loss computation (bce_with_logits)
-        #   - *_prob: sigmoid-applied probabilities for evaluation/visualization
         outputs = {
-            # Main outputs (used at inference)
-            'attended_cls_logits': attended_cls_logits,       # Main classification output
-            'cls_logits': cls_logits,                         # Baseline without attention
-            # Spatial maps — all logits (pre-sigmoid) for loss
-            'attention_map': combined_attention_logits,       # Attention module logits
-            'cam': cam_logits,                                # Weight-based CAM logits (Strategy 2)
-            'localization_map': localization_logits,          # Localization logits
-            'attention_map_main': attention_logits,           # Main attention logits
-            'attention_map_mined': mined_attention_logits,    # Mined attention logits
-            # Internal attention (always from attention module, before external override)
-            # Used by guide loss in Strategy 6 to supervise internal attention with GT mask
+            'attended_cls_logits': attended_cls_logits,
+            'cls_logits': cls_logits,
+            'attention_map': combined_attention_logits,
+            'cam': cam_logits,
+            'localization_map': localization_logits,
+            'attention_map_main': attention_logits,
+            'attention_map_mined': mined_attention_logits,
             'attention_map_internal': combined_logits_int,
-            # Spatial maps — probabilities (sigmoid-applied) for evaluation
-            'attention_map_prob': torch.sigmoid(combined_attention_logits),
-            'cam_prob': torch.sigmoid(cam_logits),
-            'localization_map_prob': torch.sigmoid(localization_logits),
-            # Internal features (for advanced use)
+            'attention_map_prob': torch.sigmoid(combined_attention_logits) if combined_attention_logits is not None else None,
+            'cam_prob': torch.sigmoid(cam_logits) if cam_logits is not None else None,
+            'localization_map_prob': torch.sigmoid(localization_logits) if localization_logits is not None else None,
             'features': final_features,
             'attended_features': attended_features,
             'cls_features': cls_features,
@@ -422,7 +436,7 @@ class GAINMTLModel(nn.Module):
             cf_outputs = self.counterfactual_module(
                 final_features,
                 defect_mask,
-                outputs['attention_map_prob'],
+                outputs.get('attention_map_prob'),
             )
             outputs['cf_logits'] = cf_outputs['cf_logits']
             outputs['cf_features'] = cf_outputs['cf_features']
@@ -574,7 +588,7 @@ class GAINMTLModel(nn.Module):
         assert x.size(0) == 1, "Explanation works with single image"
 
         with torch.no_grad():
-            outputs = self.forward(x, external_attention=external_attention)
+            outputs = self.forward(x, external_attention=external_attention, skip_unused=False)
 
             # CAM: use strategy-appropriate prob map, upsample to input resolution
             input_size = x.shape[2:]

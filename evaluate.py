@@ -278,7 +278,7 @@ def perform_error_analysis(model, dataloader, device, threshold=0.5):
             has_defect = batch['has_defect'].to(device)
             image_paths = batch.get('image_path', [None] * len(images))
 
-            outputs = model(images)
+            outputs = model(images, skip_unused=False)
             preds = outputs['cls_logits'].argmax(dim=1)
 
             for i in range(len(images)):

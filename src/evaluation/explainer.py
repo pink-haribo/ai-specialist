@@ -83,8 +83,8 @@ class DefectExplainer:
 
         image = image.to(self.device)
 
-        # Get model outputs
-        outputs = self.model(image)
+        # Get model outputs (need all outputs for explanation)
+        outputs = self.model(image, skip_unused=False)
 
         # Classification results
         cls_logits = outputs['cls_logits'][0]
