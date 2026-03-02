@@ -8,6 +8,7 @@ Provides:
 - Comparison visualizations
 """
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -17,6 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import LinearSegmentedColormap
 import cv2
+from PIL import Image
 
 
 class DefectExplainer:
@@ -338,8 +340,30 @@ class DefectExplainer:
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f'Saved explanation to {save_path}')
+            save_path = Path(save_path)
+            stem = save_path.stem      # e.g. "defective_000"
+            parent = save_path.parent
+
+            # Save original image
+            orig_path = parent / f'{stem}.png'
+            Image.fromarray(image).save(orig_path)
+
+            # Save mask image
+            if 'ground_truth_mask' in explanation:
+                gt_mask = explanation['ground_truth_mask']
+                mask_uint8 = (np.clip(gt_mask, 0, 1) * 255).astype(np.uint8)
+                mask_path = parent / f'{stem}_mask.png'
+                Image.fromarray(mask_uint8, mode='L').save(mask_path)
+
+            # Save CAM image
+            cam = explanation['cam']
+            cam_uint8 = (np.clip(cam, 0, 1) * 255).astype(np.uint8)
+            cam_color = cv2.applyColorMap(cam_uint8, cv2.COLORMAP_JET)
+            cam_color = cv2.cvtColor(cam_color, cv2.COLOR_BGR2RGB)
+            cam_path = parent / f'{stem}_cam.png'
+            Image.fromarray(cam_color).save(cam_path)
+
+            print(f'Saved images to {parent}/{stem}[_mask|_cam].png')
 
         return fig
 
